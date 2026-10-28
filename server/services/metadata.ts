@@ -1,0 +1,116 @@
+import type { MatchCandidate, MediaType } from '../domain/matching.js';
+import type { SeerrClient, SeerrDetails } from '../providers/seerr.js';
+import type { TitleMetadata, TmdbClient } from '../providers/tmdb.js';
+import type { IntegrationStore } from './integrations.js';
+
+/**
+ * Metadata source abstraction. TMDb is used directly when a token is configured; otherwise Seerr's
+ * TMDb proxy provides the same data so a TMDb key is optional.
+ */
+export interface MetadataSource {
+  readonly name: 'tmdb' | 'seerr';
+  findByImdb(imdbId: string): Promise<MatchCandidate[]>;
+  findByTvdb(tvdbId: number): Promise<MatchCandidate[]>;
+  search(mediaType: MediaType, title: string, year: number | null): Promise<MatchCandidate[]>;
+  searchAny(query: string, page: number): Promise<{ results: MatchCandidate[]; totalPages: number }>;
+  details(mediaType: MediaType, tmdbId: number): Promise<TitleMetadata | null>;
+  trending(): Promise<MatchCandidate[]>;
+}
+
+class TmdbSource implements MetadataSource {
+  readonly name = 'tmdb' as const;
+  constructor(private readonly c: TmdbClient) {}
+  findByImdb(id: string) {
+    return this.c.find(id, 'imdb_id');
+  }
+  findByTvdb(id: number) {
+    return this.c.find(String(id), 'tvdb_id');
+  }
+  async search(t: MediaType, title: string, year: number | null) {
+    const withYear = await this.c.search(t, title, year);
+    // Release years differ between sources (festival vs. theatrical), so retry without the year.
+    return withYear.length > 0 || !year ? withYear : this.c.search(t, title, null);
+  }
+  searchAny(q: string, page: number) {
+    return this.c.searchMulti(q, page);
+  }
+  details(t: MediaType, id: number) {
+    return this.c.details(t, id);
+  }
+  trending() {
+    return this.c.trending('all', 'week');
+  }
+}
+
+export function seerrDetailsToMetadata(mediaType: MediaType, d: SeerrDetails): TitleMetadata {
+  const release = d.releaseDate ?? d.firstAirDate ?? null;
+  return {
+    tmdbId: d.id,
+    mediaType,
+    title: d.title ?? d.name ?? 'Untitled',
+    originalTitle: d.originalTitle ?? d.originalName ?? null,
+    year: release && /^\d{4}/.test(release) ? Number(release.slice(0, 4)) : null,
+    releaseDate: release || null,
+    overview: d.overview || null,
+    posterPath: d.posterPath ?? null,
+    backdropPath: d.backdropPath ?? null,
+    genres: (d.genres ?? []).map((g) => g.name),
+    runtime: d.runtime ?? d.episodeRunTime?.[0] ?? null,
+    imdbId: d.imdbId ?? d.externalIds?.imdbId ?? null,
+    tvdbId: d.externalIds?.tvdbId ?? null,
+    seasons: d.seasons?.map((s) => ({ seasonNumber: s.seasonNumber, name: s.name ?? null, episodeCount: s.episodeCount ?? null, airDate: s.airDate ?? null })),
+  };
+}
+
+class SeerrSource implements MetadataSource {
+  readonly name = 'seerr' as const;
+  constructor(private readonly c: SeerrClient) {}
+  async findByImdb(id: string) {
+    return (await this.c.search(`imdb:${id}`)).hits;
+  }
+  async findByTvdb(id: number) {
+    return (await this.c.search(`tvdb:${id}`)).hits;
+  }
+  async search(t: MediaType, title: string) {
+    return (await this.c.search(title)).hits.filter((h) => h.mediaType === t);
+  }
+  async searchAny(q: string, page: number) {
+    const r = await this.c.search(q, page);
+    return { results: r.hits, totalPages: r.totalPages };
+  }
+  async details(t: MediaType, id: number) {
+    try {
+      return seerrDetailsToMetadata(t, await this.c.details(t, id));
+    } catch (err) {
+      if ((err as { kind?: string }).kind === 'not_found') return null;
+      throw err;
+    }
+  }
+  async trending() {
+    // Seerr's discover endpoint; tolerated if a deployment does not expose it.
+    const res = await this.c.http.get('/discover/trending', { page: 1 });
+    const results = (res.data as { results?: unknown[] })?.results ?? [];
+    const hits: MatchCandidate[] = [];
+    for (const r of results as Record<string, unknown>[]) {
+      if (r.mediaType !== 'movie' && r.mediaType !== 'tv') continue;
+      const date = (r.releaseDate ?? r.firstAirDate) as string | undefined;
+      hits.push({
+        tmdbId: Number(r.id),
+        mediaType: r.mediaType,
+        title: String(r.title ?? r.name ?? ''),
+        year: date && /^\d{4}/.test(date) ? Number(date.slice(0, 4)) : null,
+        posterPath: (r.posterPath as string) ?? null,
+        overview: (r.overview as string) ?? null,
+      });
+    }
+    return hits;
+  }
+}
+
+export function metadataSource(integrations: IntegrationStore): MetadataSource | null {
+  const tmdb = integrations.tmdb();
+  if (tmdb) return new TmdbSource(tmdb);
+  const seerr = integrations.seerr();
+  if (seerr) return new SeerrSource(seerr);
+  return null;
+}
