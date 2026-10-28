@@ -39,8 +39,8 @@ docker compose start
 ## Upgrade
 
 ```bash
-git pull                       # or change the image tag
-docker compose up -d --build   # or: docker compose pull && docker compose up -d
+docker compose pull && docker compose up -d   # published image (or change the pinned tag first)
+git pull && docker compose up -d --build      # when building from source
 ```
 
 On start, pending database migrations run automatically:

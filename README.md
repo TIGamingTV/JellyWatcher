@@ -36,17 +36,89 @@ Runs as one Docker container with one data volume. Everything is configured in t
 - **Apple-inspired interface:** system type, light and dark appearance, responsive from phone to
   desktop, keyboard and screen-reader friendly.
 
-## Quick start
+## Setup
+
+Requirements: Docker with Compose v2.24 or newer. Images for `linux/amd64` and `linux/arm64` are
+published to `ghcr.io/tigamingtv/jellywatcher` (tags: `latest`, `0.1.0`, `0.1`).
+
+### 1. Create `compose.yaml`
+
+Create a folder (e.g. `jellywatcher/`) with this `compose.yaml`:
+
+```yaml
+services:
+  jellywatcher:
+    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.1.0
+    container_name: jellywatcher
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${JW_HOST_PORT:-8484}:8484"
+    volumes:
+      # Database, encryption key, image cache, logs and pre-upgrade backups.
+      - ./data:/data
+    # Hardening: the app only needs to write to /data.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # If Jellyfin and Seerr run in Compose on the same host, join their network to use
+    # container names (e.g. http://jellyfin:8096) as server URLs.
+    # networks:
+    #   - media
+
+# networks:
+#   media:
+#     external: true
+```
+
+Optionally add a `.env` file next to it. Every value has a default; copy
+[.env.example](.env.example) for the full list (port, time zone, reverse proxy, encryption key, …).
+
+### 2. Start the container
+
+The container runs as uid/gid `1000`, so the data folder must be writable by that user:
 
 ```bash
-cp .env.example .env
 mkdir -p data && sudo chown 1000:1000 data
-docker compose up -d --build
+docker compose up -d
 docker compose logs jellywatcher | grep "setup code"
 ```
 
-Open `http://<host>:8484`, enter the setup code, and create the administrator. Then connect Jellyfin
-and Seerr under **Integrations**.
+### 3. Finish in the browser
+
+1. Open `http://<host>:8484`, enter the setup code, and create the administrator.
+2. Under **Integrations**, connect Jellyfin (URL + API key) and Seerr (URL + API key). TMDb and
+   Trakt are optional.
+3. Under **Watchlists › Add List**, add Trakt lists or upload Letterboxd / IMDb exports.
+
+The full guide, including account linking, webhooks and all environment variables, is in
+[docs/setup.md](docs/setup.md). For upgrades, backups and reverse proxies see
+[docs/operations.md](docs/operations.md).
+
+### Updating
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Database migrations run automatically on start, after a backup is written to `data/backups/`.
+
+### Building from source
+
+```bash
+git clone https://github.com/TIGamingTV/JellyWatcher.git && cd JellyWatcher
+# in compose.yaml, replace the `image:` line with `build: .`
+docker compose up -d --build
+```
 
 ## What each integration can and can't do
 
@@ -82,6 +154,10 @@ npm run dev      # API :8484 + UI :5173
 npm test         # 77 unit and end-to-end tests (mocked Jellyfin, Seerr, Trakt)
 npm run build
 ```
+
+Releases: set `version` in `package.json`, then push a matching tag (`git tag v0.1.0 && git push
+origin v0.1.0`). The [release workflow](.github/workflows/release.yml) tests, publishes the
+multi-arch image to GHCR, and creates the GitHub release.
 
 ## Attribution
 

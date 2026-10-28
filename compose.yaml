@@ -1,17 +1,17 @@
 # JellyWatcher — example Docker Compose deployment.
 #
-#   cp .env.example .env      # adjust values (all optional)
 #   mkdir -p data && sudo chown 1000:1000 data
 #   docker compose up -d
 #   docker compose logs jellywatcher | grep "setup code"
 #
 # Then open http://<host>:8484 and complete the setup.
+# Optional settings go in a .env file next to this one (see .env.example).
 
 services:
   jellywatcher:
-    build: .
-    # Or use a published image instead of building:
-    # image: ghcr.io/tigamingtv/jellywatcher:latest
+    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.1.0
+    # To build from source instead (inside a clone of the repository), replace `image:` with:
+    # build: .
     container_name: jellywatcher
     restart: unless-stopped
     init: true

@@ -2,25 +2,31 @@
 
 ## 1. Run the container
 
-Requirements: Docker with Compose v2.24 or newer, and about 150 MB of disk space plus the image cache.
+Requirements: Docker with Compose v2.24 or newer (`env_file.required`), and about 150 MB of disk space
+plus the image cache. Images are published to `ghcr.io/tigamingtv/jellywatcher` for `linux/amd64` and
+`linux/arm64`. Tags: `latest`, an exact version (`0.1.0`) and a minor line (`0.1`).
 
 ```bash
-git clone https://github.com/TIGamingTV/JellyWatcher.git
-cd JellyWatcher
-cp .env.example .env          # optional; every value has a sensible default
+mkdir jellywatcher && cd jellywatcher
+curl -fsSLO https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/compose.yaml
+curl -fsSL -o .env https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/.env.example   # optional
 mkdir -p data && sudo chown 1000:1000 data
-docker compose up -d --build
+docker compose up -d
 ```
+
+The [README](../README.md#setup) contains the full `compose.yaml` if you prefer to paste it.
 
 Without Compose:
 
 ```bash
-docker build -t jellywatcher .
 docker run -d --name jellywatcher --restart unless-stopped --init \
   -p 8484:8484 -v "$PWD/data:/data" \
   --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
-  jellywatcher
+  ghcr.io/tigamingtv/jellywatcher:latest
 ```
+
+From source: clone the repository, replace `image:` with `build: .` in `compose.yaml`, and run
+`docker compose up -d --build`.
 
 The container runs as uid/gid **1000**, so the mounted `data` folder must be writable by that user.
 If it isn't, the container exits with a message explaining the `chown` to run.
