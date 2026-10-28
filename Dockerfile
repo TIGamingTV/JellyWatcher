@@ -4,7 +4,8 @@
 ARG NODE_VERSION=24
 
 # ---- Build: install all dependencies, compile web + server ---------------------------------
-FROM node:${NODE_VERSION}-bookworm-slim AS build
+# The output is plain JS/CSS, so it runs on the build host's platform (no emulation for multi-arch).
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS build
 WORKDIR /app
 # Toolchain only used if a prebuilt better-sqlite3 binary is unavailable for the platform.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
