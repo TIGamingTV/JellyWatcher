@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { House, Inbox, Library, ListVideo, LogOut, Plug, Settings as SettingsIcon, Play } from 'lucide-react';
+import { House, Inbox, Library, ListVideo, LogOut, Plug, Settings as SettingsIcon } from 'lucide-react';
 import { get, post } from './lib/api';
 import { useAppearance, useMe, useUser } from './lib/session';
 import { CenterLoading } from './components/ui';
@@ -86,9 +86,7 @@ function Shell() {
       </a>
       <nav className="sidebar" aria-label="Main">
         <NavLink to="/" className="brand" aria-label="JellyWatcher home">
-          <span className="brand-mark" aria-hidden>
-            <Play size={15} fill="currentColor" />
-          </span>
+          <img className="brand-mark" src="/logo.png" alt="" aria-hidden />
           JellyWatcher
         </NavLink>
         {PRIMARY_NAV.map(({ to, label, icon: Icon, end }) => (
@@ -129,9 +127,7 @@ function Shell() {
 
       <div className="mobile-top">
         <NavLink to="/" className="brand" style={{ padding: 0 }} aria-label="JellyWatcher home">
-          <span className="brand-mark" aria-hidden>
-            <Play size={15} fill="currentColor" />
-          </span>
+          <img className="brand-mark" src="/logo.png" alt="" aria-hidden />
           JellyWatcher
         </NavLink>
         <div className="toolbar" style={{ gap: 0 }}>
