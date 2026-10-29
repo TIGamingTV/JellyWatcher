@@ -12,6 +12,7 @@ import { metadataSource, type MetadataSource } from './services/metadata.js';
 import { SettingsStore } from './services/settings.js';
 import { StatusService } from './services/status.js';
 import { TitleService } from './services/titles.js';
+import { WatchService } from './services/watched.js';
 
 /** Composition root: every service the routes and jobs need, built once per process. */
 export class AppContext {
@@ -24,6 +25,7 @@ export class AppContext {
   readonly status: StatusService;
   readonly activity: ActivityService;
   readonly jobs: JobRunner;
+  readonly watches: WatchService;
 
   constructor(
     readonly config: AppConfig,
@@ -41,6 +43,7 @@ export class AppContext {
     this.status = new StatusService(db, this.integrations, this.settings);
     this.activity = new ActivityService(db);
     this.jobs = new JobRunner(db, log.child({ component: 'jobs' }));
+    this.watches = new WatchService(db);
   }
 
   metadata(): MetadataSource | null {

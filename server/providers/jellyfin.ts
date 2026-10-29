@@ -6,7 +6,8 @@ import { ProviderError } from '../http/errors.js';
 /**
  * Jellyfin API adapter (12.x, compatible with 10.10+). Uses only the
  * `Authorization: MediaBrowser ...` header, since legacy X-Emby-Token / api_key auth is disabled in 12.0.
- * JellyWatcher never writes to Jellyfin; all calls are reads except sign-in / sign-out of a link session.
+ * JellyWatcher never writes library data to Jellyfin. The only other calls are sign-in / sign-out
+ * (password and Quick Connect) and, once during the guided setup, creating its own API key.
  */
 
 const CLIENT = 'JellyWatcher';
@@ -57,6 +58,16 @@ const ItemsResult = z.object({ Items: z.array(z.unknown()), TotalRecordCount: z.
 
 const User = z.object({ Id: z.string(), Name: z.string(), Policy: z.object({ IsAdministrator: z.boolean().nullish(), IsDisabled: z.boolean().nullish() }).nullish() });
 export type JellyfinUserJson = z.infer<typeof User>;
+
+/** A Jellyfin sign-in session (password or Quick Connect). */
+export interface JellyfinSignIn {
+  token: string;
+  deviceId: string;
+  userId: string;
+  name: string;
+  isAdmin: boolean;
+  disabled: boolean;
+}
 
 export interface NormalizedJellyfinItem {
   id: string;
@@ -205,32 +216,101 @@ export class JellyfinClient {
     return z.array(User).parse(res.data);
   }
 
-  /**
-   * Verifies a person's Jellyfin credentials. The resulting session token is revoked immediately;
-   * only the user id is kept.
-   */
-  async verifyCredentials(username: string, password: string): Promise<{ userId: string; name: string; isAdmin: boolean }> {
-    const deviceId = `${this.deviceId}-${crypto.createHash('sha256').update(username.toLowerCase()).digest('hex').slice(0, 12)}`;
-    const authHeader = mediaBrowserHeader({ deviceId, version: this.version, device: 'JellyWatcher Account Link' });
-    let res;
+  /** Device id for one person's sign-in, so their Jellyfin sessions don't replace each other. */
+  signInDeviceId(seed: string): string {
+    return `${this.deviceId}-${crypto.createHash('sha256').update(seed.toLowerCase()).digest('hex').slice(0, 12)}`;
+  }
+
+  private anonymous(deviceId: string, device = 'JellyWatcher Sign-In') {
+    return { Authorization: mediaBrowserHeader({ deviceId, version: this.version, device }) };
+  }
+
+  private asSession(token: string, deviceId: string, device = 'JellyWatcher Sign-In') {
+    return { Authorization: mediaBrowserHeader({ deviceId, version: this.version, device, token }) };
+  }
+
+  private parseAuth(data: unknown, deviceId: string): JellyfinSignIn {
+    const d = z.object({ AccessToken: z.string(), User: User }).parse(data);
+    return { token: d.AccessToken, deviceId, userId: d.User.Id, name: d.User.Name, isAdmin: d.User.Policy?.IsAdministrator ?? false, disabled: d.User.Policy?.IsDisabled ?? false };
+  }
+
+  /** Signs in with a username and password. The caller must end the returned session. */
+  async authenticateByName(username: string, password: string, deviceId = this.signInDeviceId(username)): Promise<JellyfinSignIn> {
     try {
-      res = await this.http.request({
-        method: 'POST',
-        path: '/Users/AuthenticateByName',
-        body: { Username: username, Pw: password },
-        headers: { Authorization: authHeader },
-      });
+      const res = await this.http.request({ method: 'POST', path: '/Users/AuthenticateByName', body: { Username: username, Pw: password }, headers: this.anonymous(deviceId) });
+      return this.parseAuth(res.data, deviceId);
     } catch (err) {
       if (err instanceof ProviderError && (err.status === 401 || err.status === 400)) {
         throw new ProviderError('jellyfin', 'auth', 'Jellyfin rejected that username or password.');
       }
       throw err;
     }
-    const data = z.object({ AccessToken: z.string(), User: User }).parse(res.data);
-    await this.http
-      .request({ method: 'POST', path: '/Sessions/Logout', headers: { Authorization: mediaBrowserHeader({ deviceId, version: this.version, token: data.AccessToken }) } })
-      .catch(() => undefined);
-    return { userId: data.User.Id, name: data.User.Name, isAdmin: data.User.Policy?.IsAdministrator ?? false };
+  }
+
+  /** Ends a sign-in session; JellyWatcher keeps no Jellyfin user tokens. */
+  async endSession(s: Pick<JellyfinSignIn, 'token' | 'deviceId'>): Promise<void> {
+    await this.http.request({ method: 'POST', path: '/Sessions/Logout', headers: this.asSession(s.token, s.deviceId) }).catch(() => undefined);
+  }
+
+  /**
+   * Verifies a person's Jellyfin credentials. The resulting session token is revoked immediately;
+   * only the user id is kept.
+   */
+  async verifyCredentials(username: string, password: string): Promise<{ userId: string; name: string; isAdmin: boolean }> {
+    const s = await this.authenticateByName(username, password);
+    await this.endSession(s);
+    return { userId: s.userId, name: s.name, isAdmin: s.isAdmin };
+  }
+
+  /** Whether Quick Connect is turned on in Jellyfin (Dashboard › General › Quick Connect). */
+  async quickConnectEnabled(): Promise<boolean> {
+    const res = await this.http.request({ path: '/QuickConnect/Enabled', headers: this.anonymous(this.deviceId), retries: 0, timeoutMs: 4000 });
+    return res.data === true || res.data === 'true';
+  }
+
+  /** Starts a Quick Connect request: the code is entered in a signed-in Jellyfin app to approve it. */
+  async quickConnectInitiate(deviceId: string): Promise<{ secret: string; code: string }> {
+    try {
+      const res = await this.http.request({ method: 'POST', path: '/QuickConnect/Initiate', headers: this.anonymous(deviceId) });
+      const d = z.object({ Secret: z.string(), Code: z.string() }).parse(res.data);
+      return { secret: d.Secret, code: d.Code };
+    } catch (err) {
+      if (err instanceof ProviderError && (err.status === 401 || err.status === 403)) {
+        throw new ProviderError('jellyfin', 'forbidden', 'Quick Connect is turned off on this Jellyfin server. Turn it on in Jellyfin › Dashboard › General.');
+      }
+      throw err;
+    }
+  }
+
+  /** 'pending' until approved in Jellyfin, 'expired' once Jellyfin forgot the request. */
+  async quickConnectState(secret: string, deviceId: string): Promise<'pending' | 'approved' | 'expired'> {
+    try {
+      const res = await this.http.request({ path: '/QuickConnect/Connect', query: { secret }, headers: this.anonymous(deviceId), retries: 0 });
+      return z.object({ Authenticated: z.boolean().nullish() }).parse(res.data).Authenticated ? 'approved' : 'pending';
+    } catch (err) {
+      if (err instanceof ProviderError && (err.status === 404 || err.status === 400 || err.status === 401)) return 'expired';
+      throw err;
+    }
+  }
+
+  /** Completes an approved Quick Connect request. The caller must end the returned session. */
+  async authenticateWithQuickConnect(secret: string, deviceId: string): Promise<JellyfinSignIn> {
+    const res = await this.http.request({ method: 'POST', path: '/Users/AuthenticateWithQuickConnect', body: { Secret: secret }, headers: this.anonymous(deviceId) });
+    return this.parseAuth(res.data, deviceId);
+  }
+
+  /** Creates a server API key with an administrator's session (used by the guided setup). */
+  async createApiKey(s: Pick<JellyfinSignIn, 'token' | 'deviceId'>, app = CLIENT): Promise<string> {
+    const headers = this.asSession(s.token, s.deviceId);
+    await this.http.request({ method: 'POST', path: '/Auth/Keys', query: { app }, headers });
+    const res = await this.http.request({ path: '/Auth/Keys', headers });
+    const keys = z
+      .object({ Items: z.array(z.object({ AccessToken: z.string(), AppName: z.string().nullish(), DateCreated: z.string().nullish() })) })
+      .parse(res.data)
+      .Items.filter((k) => k.AppName === app)
+      .sort((a, b) => (b.DateCreated ?? '').localeCompare(a.DateCreated ?? ''));
+    if (!keys[0]) throw new ProviderError('jellyfin', 'invalid_response', 'Jellyfin did not return the new API key.');
+    return keys[0].AccessToken;
   }
 
   /** Iterates the whole movie + series library page by page. */

@@ -1,6 +1,6 @@
 import type { MatchCandidate, MediaType } from '../domain/matching.js';
 import type { SeerrClient, SeerrDetails } from '../providers/seerr.js';
-import { showTotals, type TitleMetadata, type TmdbClient } from '../providers/tmdb.js';
+import { showTotals, type DiscoverKind, type TitleMetadata, type TmdbClient } from '../providers/tmdb.js';
 import type { IntegrationStore } from './integrations.js';
 
 /**
@@ -13,6 +13,7 @@ export interface MetadataSource {
   findByTvdb(tvdbId: number): Promise<MatchCandidate[]>;
   search(mediaType: MediaType, title: string, year: number | null): Promise<MatchCandidate[]>;
   searchAny(query: string, page: number): Promise<{ results: MatchCandidate[]; totalPages: number }>;
+  discover(kind: DiscoverKind, page: number): Promise<{ results: MatchCandidate[]; totalPages: number }>;
   details(mediaType: MediaType, tmdbId: number): Promise<TitleMetadata | null>;
 }
 
@@ -32,6 +33,9 @@ class TmdbSource implements MetadataSource {
   }
   searchAny(q: string, page: number) {
     return this.c.searchMulti(q, page);
+  }
+  discover(kind: DiscoverKind, page: number) {
+    return this.c.discover(kind, page);
   }
   details(t: MediaType, id: number) {
     return this.c.details(t, id);
@@ -74,6 +78,10 @@ class SeerrSource implements MetadataSource {
   }
   async searchAny(q: string, page: number) {
     const r = await this.c.search(q, page);
+    return { results: r.hits, totalPages: r.totalPages };
+  }
+  async discover(kind: DiscoverKind, page: number) {
+    const r = await this.c.discover(kind, page);
     return { results: r.hits, totalPages: r.totalPages };
   }
   async details(t: MediaType, id: number) {

@@ -117,7 +117,7 @@ export class SessionService {
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** Endpoints that are called before a session exists or by other servers; protected by other means. */
-const CSRF_EXEMPT = [/^\/api\/auth\/login$/, /^\/api\/auth\/jellyfin$/, /^\/api\/setup$/, /^\/api\/webhooks\//];
+const CSRF_EXEMPT = [/^\/api\/auth\/login$/, /^\/api\/auth\/jellyfin$/, /^\/api\/auth\/quick-connect(\/(poll|cancel))?$/, /^\/api\/setup(\/[a-z/-]+)?$/, /^\/api\/webhooks\//];
 
 export function registerAuth(app: FastifyInstance, ctx: AppContext, sessions: SessionService): void {
   app.decorateRequest('user', null);

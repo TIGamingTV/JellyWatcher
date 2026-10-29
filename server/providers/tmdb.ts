@@ -10,6 +10,8 @@ import type { MatchCandidate, MediaType } from '../domain/matching.js';
 
 export const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
 
+export type DiscoverKind = 'trending' | 'movies' | 'tv';
+
 const Result = z.object({
   id: z.number(),
   media_type: z.string().nullish(),
@@ -132,6 +134,21 @@ export class TmdbClient {
     return {
       results: data.results.filter((r) => r.media_type === 'movie' || r.media_type === 'tv').map((r) => toCandidate(r, r.media_type as MediaType)),
       totalPages: data.total_pages ?? 1,
+    };
+  }
+
+  /** Trending titles this week, or popular movies / shows. */
+  async discover(kind: DiscoverKind, page = 1): Promise<{ results: MatchCandidate[]; totalPages: number }> {
+    const path = kind === 'trending' ? '/trending/all/week' : kind === 'movies' ? '/movie/popular' : '/tv/popular';
+    const res = await this.http.get(path, { page, include_adult: 'false' });
+    const data = z.object({ results: z.array(Result), total_pages: z.number().nullish() }).parse(res.data);
+    const fixed: MediaType | null = kind === 'movies' ? 'movie' : kind === 'tv' ? 'tv' : null;
+    return {
+      results: data.results
+        .map((r) => ({ r, t: (fixed ?? r.media_type) as MediaType }))
+        .filter(({ t }) => t === 'movie' || t === 'tv')
+        .map(({ r, t }) => toCandidate(r, t)),
+      totalPages: Math.min(data.total_pages ?? 1, 500),
     };
   }
 

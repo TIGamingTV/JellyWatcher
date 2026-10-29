@@ -10,7 +10,7 @@ import { listInfoFromJson, parseTraktListUrl } from '../providers/trakt.js';
 import { decodeText } from '../providers/csv.js';
 import { SOURCE_DESCRIPTORS, type ListFetchResult, type SourceListInfo } from '../providers/types.js';
 import { requireUser, type SessionUser } from '../security/auth.js';
-import { isTimeline, type ListRow } from '../services/lists.js';
+import { isTimeline, LOCAL_PROVIDER, type ListRow } from '../services/lists.js';
 import { buildTimelines, type TimelineSummary } from '../services/timeline.js';
 import { syncList, type TraktListRef } from '../sync/lists.js';
 import { triggerJob } from '../sync/scheduler.js';
@@ -49,6 +49,10 @@ export function listView(ctx: AppContext, l: ListRow, summary?: TimelineSummary)
     lastError: l.last_error,
     display: l.display,
     timeline: isTimeline(l),
+    /** Local lists: entries can be added and removed here. */
+    editable: l.provider === LOCAL_PROVIDER,
+    /** The person reordered the entries (kept across syncs). */
+    customOrder: ctx.lists.hasCustomOrder(l.id),
     summary: summary ?? null,
     createdAt: l.created_at,
   };
@@ -61,7 +65,7 @@ async function runListSync(ctx: AppContext, list: ListRow) {
   return res;
 }
 
-export async function sourceRoutes(app: FastifyInstance, { ctx, users }: AppDeps) {
+export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConnect }: AppDeps) {
   const pending = new Map<number, PendingDevice>();
 
   const traktClient = () => {
@@ -319,6 +323,42 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users }: AppDeps
     return { linked: { userId: verified.userId, username: verified.name } };
   });
 
+  app.post('/connections/jellyfin/quick-connect', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req) => {
+    const u = requireUser(req);
+    const jf = ctx.integrations.jellyfin();
+    if (!jf) throw new ApiError(400, 'jellyfin_not_configured', 'Jellyfin is not connected yet.');
+    const deviceId = jf.signInDeviceId(`link-${u.id}-${Date.now()}`);
+    let r;
+    try {
+      r = await jf.quickConnectInitiate(deviceId);
+    } catch (err) {
+      if (err instanceof ProviderError && err.kind === 'forbidden') throw new ApiError(400, 'quick_connect_disabled', err.message);
+      throw err;
+    }
+    const p = quickConnect.add({ purpose: 'link', url: jf.baseUrl, secret: r.secret, code: r.code, deviceId, userId: u.id });
+    return { id: p.id, code: r.code, expiresAt: new Date(p.expiresAt).toISOString(), interval: 2 };
+  });
+
+  app.post('/connections/jellyfin/quick-connect/poll', { config: { rateLimit: { max: 90, timeWindow: '1 minute' } } }, async (req) => {
+    const u = requireUser(req);
+    const body = parse(z.object({ id: z.string().min(10).max(100) }), req.body);
+    const jf = ctx.integrations.jellyfin();
+    if (!jf) throw new ApiError(400, 'jellyfin_not_configured', 'Jellyfin is not connected yet.');
+    const p = quickConnect.get(body.id, 'link', u.id);
+    if (!p) return { status: 'expired' };
+    const state = await jf.quickConnectState(p.secret, p.deviceId);
+    if (state !== 'approved') {
+      if (state === 'expired') quickConnect.delete(p.id);
+      return { status: state };
+    }
+    quickConnect.delete(p.id);
+    const s = await jf.authenticateWithQuickConnect(p.secret, p.deviceId);
+    await jf.endSession(s);
+    users.update(u.id, { jellyfinUserId: s.userId, jellyfinUsername: s.name });
+    void triggerJob(ctx, 'jellyfin', 'event');
+    return { status: 'authorized', linked: { userId: s.userId, username: s.name } };
+  });
+
   app.delete('/connections/jellyfin', async (req) => {
     const u = requireUser(req);
     if (u.authSource === 'jellyfin' && !u.hasPassword) {
@@ -416,15 +456,119 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users }: AppDeps
     const u = requireUser(req);
     const { id } = parse(IdParam, req.params);
     const body = parse(
-      z.object({ name: z.string().trim().min(1).max(120).optional(), autoSync: z.boolean().optional(), display: z.enum(['auto', 'grid', 'timeline']).optional() }),
+      z.object({
+        name: z.string().trim().min(1).max(120).optional(),
+        description: z.string().trim().max(2000).nullable().optional(),
+        autoSync: z.boolean().optional(),
+        display: z.enum(['auto', 'grid', 'timeline']).optional(),
+      }),
       req.body,
     );
     const l = ctx.lists.getOwned(id, u.id);
     if (!l) throw new ApiError(404, 'not_found', 'List not found.');
     if (body.name) ctx.lists.rename(id, body.name);
+    if (body.description !== undefined) {
+      if (l.provider !== LOCAL_PROVIDER) throw new ApiError(400, 'not_editable', 'Only lists created in JellyWatcher have an editable description.');
+      ctx.lists.setDescription(id, body.description || null);
+    }
     if (body.autoSync !== undefined) ctx.lists.setAutoSync(id, body.autoSync);
     if (body.display) ctx.lists.setDisplay(id, body.display);
     return { list: listView(ctx, ctx.lists.get(id)!) };
+  });
+
+  // ---- Local lists: create, duplicate, edit ------------------------------------------------
+  const ownedList = (userId: number, id: number) => {
+    const l = ctx.lists.getOwned(id, userId);
+    if (!l) throw new ApiError(404, 'not_found', 'List not found.');
+    return l;
+  };
+  const editableList = (userId: number, id: number) => {
+    const l = ownedList(userId, id);
+    if (l.provider !== LOCAL_PROVIDER) {
+      throw new ApiError(400, 'not_editable', 'Entries of a synced list come from its source. Duplicate the list to edit it here.');
+    }
+    return l;
+  };
+
+  app.post('/lists/local', async (req) => {
+    const u = requireUser(req);
+    const body = parse(z.object({ name: z.string().trim().min(1).max(120), description: z.string().trim().max(2000).optional() }), req.body);
+    const id = ctx.lists.createLocal(u.id, body.name, body.description || null);
+    ctx.activity.add(u.id, 'list_created', `Created the list “${body.name}”.`);
+    return { list: listView(ctx, ctx.lists.get(id)!) };
+  });
+
+  app.post('/lists/:id/duplicate', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    const body = parse(z.object({ name: z.string().trim().min(1).max(120).optional() }), req.body ?? {});
+    const src = ownedList(u.id, id);
+    const name = body.name || `${src.name} (Copy)`.slice(0, 120);
+    const newId = ctx.lists.duplicate(id, u.id, name);
+    ctx.activity.add(u.id, 'list_created', `Duplicated “${src.name}” as “${name}”.`);
+    const l = ctx.lists.get(newId)!;
+    return { list: listView(ctx, l, buildTimelines(ctx, u, [l]).get(l.id)?.summary) };
+  });
+
+  /** Saves the person's own order (drag and drop). Works for every list and survives syncs. */
+  app.put('/lists/:id/order', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    const body = parse(z.object({ itemIds: z.array(z.number().int().positive()).max(20_000) }), req.body);
+    ownedList(u.id, id);
+    const ordered = ctx.lists.setOrder(id, body.itemIds);
+    return { ordered, list: listView(ctx, ctx.lists.get(id)!) };
+  });
+
+  app.delete('/lists/:id/order', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    ownedList(u.id, id);
+    ctx.lists.resetOrder(id);
+    return { list: listView(ctx, ctx.lists.get(id)!) };
+  });
+
+  app.post('/lists/:id/items', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    const body = parse(
+      z.object({
+        tmdbId: z.number().int().positive(),
+        mediaType: z.enum(['movie', 'tv']),
+        title: z.string().trim().min(1).max(300),
+        year: z.number().int().min(1870).max(2200).nullable().optional(),
+        posterPath: z.string().regex(/^\/[A-Za-z0-9_-]+\.(jpg|jpeg|png|webp)$/i).nullable().optional(),
+        overview: z.string().max(5000).nullable().optional(),
+        season: z.number().int().min(0).max(500).nullable().optional(),
+        episode: z.number().int().min(1).max(5000).nullable().optional(),
+        episodeTitle: z.string().trim().max(300).nullable().optional(),
+      }),
+      req.body,
+    );
+    editableList(u.id, id);
+    if (body.mediaType === 'movie' && body.season != null) throw new ApiError(400, 'invalid_scope', 'Movies have no seasons or episodes.');
+    if (body.episode != null && body.season == null) throw new ApiError(400, 'invalid_scope', 'Choose the season of that episode.');
+    const titleId = ctx.titles.ensure({
+      mediaType: body.mediaType,
+      tmdbId: body.tmdbId,
+      title: body.title,
+      year: body.year ?? null,
+      posterPath: body.posterPath ?? null,
+      overview: body.overview ?? null,
+      source: 'manual',
+    });
+    const itemId = ctx.lists.addLocalItem(id, { titleId, mediaType: body.mediaType, title: body.title, year: body.year ?? null, tmdbId: body.tmdbId, season: body.season, episode: body.episode, episodeTitle: body.episodeTitle });
+    if (itemId < 0) throw new ApiError(409, 'already_in_list', 'That is already on this list.');
+    void triggerJob(ctx, 'metadata', 'event');
+    return { itemId, list: listView(ctx, ctx.lists.get(id)!) };
+  });
+
+  app.delete('/lists/:id/items/:itemId', async (req) => {
+    const u = requireUser(req);
+    const p = parse(z.object({ id: z.coerce.number().int().positive(), itemId: z.coerce.number().int().positive() }), req.params);
+    editableList(u.id, p.id);
+    if (!ctx.lists.removeItem(p.id, p.itemId)) throw new ApiError(404, 'not_found', 'Entry not found.');
+    return { list: listView(ctx, ctx.lists.get(p.id)!) };
   });
 
   app.delete('/lists/:id', async (req) => {

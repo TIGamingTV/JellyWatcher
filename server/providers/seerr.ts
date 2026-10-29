@@ -164,10 +164,21 @@ export class SeerrClient {
 
   async search(query: string, page = 1, asUser?: number | null): Promise<{ hits: SeerrSearchHit[]; totalPages: number }> {
     const res = await this.http.get(`/search?query=${encodeSeerrQuery(query)}`, { page }, { headers: this.asUser(asUser) });
-    const data = z.object({ totalPages: z.number().nullish(), results: z.array(z.unknown()) }).parse(res.data);
+    return this.parseResults(res.data);
+  }
+
+  /** Seerr's own discover feeds (trending, popular movies, popular shows). */
+  async discover(kind: 'trending' | 'movies' | 'tv', page = 1): Promise<{ hits: SeerrSearchHit[]; totalPages: number }> {
+    const res = await this.http.get(`/discover/${kind}`, { page });
+    return this.parseResults(res.data, kind === 'movies' ? 'movie' : kind === 'tv' ? 'tv' : undefined);
+  }
+
+  private parseResults(raw: unknown, fallbackType?: MediaType): { hits: SeerrSearchHit[]; totalPages: number } {
+    const data = z.object({ totalPages: z.number().nullish(), results: z.array(z.unknown()) }).parse(raw);
     const hits: SeerrSearchHit[] = [];
-    for (const raw of data.results) {
-      const r = SearchResult.safeParse(raw);
+    for (const item of data.results) {
+      const withType = fallbackType && item && typeof item === 'object' && !('mediaType' in item) ? { ...item, mediaType: fallbackType } : item;
+      const r = SearchResult.safeParse(withType);
       if (!r.success || (r.data.mediaType !== 'movie' && r.data.mediaType !== 'tv')) continue;
       const d = r.data;
       hits.push({

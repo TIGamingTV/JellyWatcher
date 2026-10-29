@@ -147,7 +147,7 @@ export class TitleService {
         this.db.prepare(`UPDATE ${table} SET title_id = ? WHERE title_id = ?`).run(intoId, fromId);
       }
       // Keyed by title: keep the surviving row's entry when both exist (the rest cascades away).
-      for (const table of ['watch_history', 'watched_episodes']) {
+      for (const table of ['watch_history', 'watched_episodes', 'manual_watches']) {
         this.db.prepare(`UPDATE OR IGNORE ${table} SET title_id = ? WHERE title_id = ?`).run(intoId, fromId);
       }
       this.db.prepare('DELETE FROM titles WHERE id = ?').run(fromId);

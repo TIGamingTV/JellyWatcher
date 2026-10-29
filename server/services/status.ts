@@ -14,6 +14,12 @@ import {
 } from '../../shared/status.js';
 import type { IntegrationStore } from './integrations.js';
 import type { SettingsStore } from './settings.js';
+import { epKey, loadManualMarks, manualEpisodeKeys, seasonSizes } from './watched.js';
+
+/** Source label for viewing state that comes from the person's own marks. */
+export const MANUAL_SOURCE = 'Marked by you';
+
+const latest = (dates: string[]): string | null => (dates.length ? dates.reduce((a, b) => (a > b ? a : b)) : null);
 
 export interface Progress {
   percent: number | null;
@@ -109,7 +115,7 @@ export class StatusService {
     const reqRows = new Map<number, ReqRow[]>();
     const seerrRows = new Map<number, SeerrRow>();
     const history = new Map<number, HistoryRow>();
-    const watchedEpisodes = new Map<number, number>();
+    const jfEpisodes = new Map<number, Set<string>>();
     for (const ids of chunk(titleIds, 500)) {
       const ph = ids.map(() => '?').join(',');
       const jfAll = this.db
@@ -137,23 +143,30 @@ export class StatusService {
       const hAll = this.db.prepare(`SELECT * FROM watch_history WHERE user_id = ? AND title_id IN (${ph})`).all(user.id, ...ids) as HistoryRow[];
       for (const r of hAll) history.set(r.title_id, r);
       const weAll = this.db
-        .prepare(`SELECT title_id, COUNT(*) AS n FROM watched_episodes WHERE user_id = ? AND season > 0 AND title_id IN (${ph}) GROUP BY title_id`)
-        .all(user.id, ...ids) as { title_id: number; n: number }[];
-      for (const r of weAll) watchedEpisodes.set(r.title_id, r.n);
+        .prepare(`SELECT title_id, season, episode FROM watched_episodes WHERE user_id = ? AND season > 0 AND title_id IN (${ph})`)
+        .all(user.id, ...ids) as { title_id: number; season: number; episode: number }[];
+      for (const r of weAll) {
+        if (!jfEpisodes.has(r.title_id)) jfEpisodes.set(r.title_id, new Set());
+        jfEpisodes.get(r.title_id)!.add(epKey(r.season, r.episode));
+      }
     }
     const types = new Map<number, 'movie' | 'tv'>();
     const episodeTotals = new Map<number, number | null>();
+    const sizes = new Map<number, Map<number, number | null>>();
     for (const ids of chunk(titleIds, 500)) {
-      const rows = this.db.prepare(`SELECT id, media_type, episode_count FROM titles WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as {
+      const rows = this.db.prepare(`SELECT id, media_type, episode_count, seasons FROM titles WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as {
         id: number;
         media_type: 'movie' | 'tv';
         episode_count: number | null;
+        seasons: string | null;
       }[];
       for (const r of rows) {
         types.set(r.id, r.media_type);
         episodeTotals.set(r.id, r.episode_count);
+        if (r.media_type === 'tv') sizes.set(r.id, seasonSizes(r.seasons));
       }
     }
+    const manual = loadManualMarks(this.db, user.id, titleIds);
 
     for (const id of titleIds) {
       const mediaType = types.get(id) ?? 'movie';
@@ -207,7 +220,11 @@ export class StatusService {
       let viewing: TitleStatus['viewing'];
       const best = [...jfItems].sort((a, b) => (b.played ?? 0) - (a.played ?? 0) || (b.played_percentage ?? 0) - (a.played_percentage ?? 0))[0];
       const hist = history.get(id);
-      const epWatched = watchedEpisodes.get(id) ?? 0;
+      const marks = manual.get(id);
+      const jfEps = jfEpisodes.get(id);
+      const manualEps = mediaType === 'tv' ? manualEpisodeKeys(marks, sizes.get(id) ?? new Map()) : new Set<string>();
+      const allEps = new Set([...(jfEps ?? []), ...[...manualEps].filter((k) => !k.startsWith('0:'))]);
+      const epWatched = allEps.size;
       if (user.jellyfinUserId && best?.synced_at) {
         const state = mapViewing(mediaType, {
           played: best.played === 1,
@@ -239,7 +256,15 @@ export class StatusService {
           progress: { percent: hist.percent, playedEpisodes: hist.played_episodes, totalEpisodes: hist.total_episodes, lastPlayedAt: hist.last_played_at },
         };
       } else if (epWatched > 0) {
-        viewing = { state: 'in_progress', syncedAt: null, stale: false, source: 'Jellyfin', detail: 'Progress from before it left the library.', progress: { percent: null, playedEpisodes: null, totalEpisodes: null, lastPlayedAt: null } };
+        const fromJellyfin = (jfEps?.size ?? 0) > 0;
+        viewing = {
+          state: 'in_progress',
+          syncedAt: null,
+          stale: false,
+          source: fromJellyfin ? 'Jellyfin' : MANUAL_SOURCE,
+          detail: fromJellyfin ? 'Progress from before it left the library.' : 'Episodes you marked as watched.',
+          progress: { percent: null, playedEpisodes: null, totalEpisodes: null, lastPlayedAt: null },
+        };
       } else if (!user.jellyfinUserId) {
         viewing = { state: 'unavailable', syncedAt: null, stale: false, source: null, detail: 'Link your Jellyfin account to see viewing progress.', progress: null };
       } else if (!best) {
@@ -253,6 +278,21 @@ export class StatusService {
         const total = Math.max(episodeTotals.get(id) ?? 0, viewing.progress.totalEpisodes ?? 0) || null;
         viewing.state = total !== null && played >= total ? 'watched' : 'in_progress';
         viewing.progress = { ...viewing.progress, playedEpisodes: played, totalEpisodes: total, percent: total ? Math.round((Math.min(played, total) / total) * 100) : viewing.progress.percent };
+      }
+      // Marked as watched by the person: always counts as watched, whatever Jellyfin knows.
+      const manualAt = marks?.title ?? (mediaType === 'tv' ? latest([...(marks?.seasons.values() ?? []), ...(marks?.episodes.values() ?? [])]) : null);
+      if (marks?.title && viewing.state !== 'watched') {
+        const total = mediaType === 'tv' ? (episodeTotals.get(id) ?? viewing.progress?.totalEpisodes ?? null) : null;
+        viewing = {
+          state: 'watched',
+          syncedAt: marks.title,
+          stale: false,
+          source: MANUAL_SOURCE,
+          detail: 'You marked this as watched.',
+          progress: { percent: 100, playedEpisodes: total, totalEpisodes: total, lastPlayedAt: marks.title },
+        };
+      } else if (manualAt && viewing.progress && (!viewing.progress.lastPlayedAt || viewing.progress.lastPlayedAt < manualAt)) {
+        viewing.progress = { ...viewing.progress, lastPlayedAt: manualAt };
       }
 
       out.set(id, {

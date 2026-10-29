@@ -4,7 +4,7 @@
 
 Requirements: Docker with Compose v2.24 or newer (`env_file.required`), and about 150 MB of disk space
 plus the image cache. Images are published to `ghcr.io/tigamingtv/jellywatcher` for `linux/amd64` and
-`linux/arm64`. Tags: `latest`, an exact version (`0.2.0`) and a minor line (`0.2`).
+`linux/arm64`. Tags: `latest`, an exact version (`0.3.0`) and a minor line (`0.3`).
 
 ```bash
 mkdir jellywatcher && cd jellywatcher
@@ -31,17 +31,37 @@ From source: clone the repository, replace `image:` with `build: .` in `compose.
 The container runs as uid/gid **1000**, so the mounted `data` folder must be writable by that user.
 If it isn't, the container exits with a message explaining the `chown` to run.
 
-## 2. Create the administrator
+## 2. Set up with Jellyfin
 
 1. Get the one-time setup code:
    ```bash
    docker compose logs jellywatcher | grep "setup code"
    ```
    If you set `JW_SETUP_TOKEN` in `.env`, use that value instead.
-2. Open `http://<host>:8484` and enter the code, a username and a password of at least 10 characters.
+2. Open `http://<host>:8484`, enter the code and choose **Set Up with Jellyfin** (recommended).
+3. Enter the Jellyfin **server URL** as the JellyWatcher container reaches it (see below).
+4. Sign in with a **Jellyfin administrator** account, with its password or with **Quick Connect**
+   (enter the shown code in any signed-in Jellyfin app under Settings › Quick Connect).
+5. Choose whether everyone with an account on the Jellyfin server may sign in. Off: only people you
+   add or import in Settings › Users.
+
+This works like Seerr: the Jellyfin administrator becomes the JellyWatcher administrator, and
+JellyWatcher creates its own API key (Jellyfin › Dashboard › API Keys shows it as "JellyWatcher").
+The administrator's Jellyfin session is ended right after; no Jellyfin passwords or user tokens are
+stored.
+
+Prefer not to use Jellyfin? Choose **Create a Local Administrator Instead** and enter a username and a
+password of at least 10 characters.
 
 Only someone who can read the container log can claim the admin account. This protects a fresh
 install on a shared network.
+
+### Signing in
+
+The sign-in page offers the Jellyfin account first: username and password, or **Use Quick Connect**
+(shown when Quick Connect is enabled in Jellyfin › Dashboard › General). **Use a Local Account**
+signs in with a JellyWatcher password, e.g. when Jellyfin is down. People who sign in with Jellyfin
+can set a JellyWatcher password in Settings › Account.
 
 ## 3. Connect services (Integrations)
 
@@ -56,7 +76,7 @@ Each service also has an optional **Browser URL** for links you click.
 
 | Service | What you need | Where to get it |
 | --- | --- | --- |
-| **Jellyfin** (recommended) | Server URL + API key | Jellyfin › Dashboard › API Keys › **+** |
+| **Jellyfin** (recommended) | Server URL + API key (created automatically by the guided setup) | Jellyfin › Dashboard › API Keys › **+**, only when connecting manually |
 | **Seerr** (for requests) | Server URL (without `/api/v1`) + API key | Seerr › Settings › General › API Key |
 | **TMDb** (optional) | API Read Access Token | themoviedb.org › Settings › API. Without it, Seerr's TMDb access is used. |
 | **Trakt** (optional) | Client ID + Client Secret | Create an app at trakt.tv/oauth/applications/new. The Redirect URI can be `urn:ietf:wg:oauth:2.0:oob`; device sign-in doesn't use it. |
@@ -67,20 +87,23 @@ stored value.
 
 ### Link people's accounts
 
-- **Jellyfin:** each person opens Integrations › Jellyfin and signs in once with their Jellyfin
-  credentials. This proves the account is theirs. Only the user id is stored. Administrators can also
-  assign accounts in Settings › Users.
+- **Jellyfin:** people who sign in with Jellyfin are linked automatically. Local accounts open
+  Integrations › Jellyfin and sign in once with their Jellyfin password or Quick Connect. This proves
+  the account is theirs. Only the user id is stored. Administrators can also assign accounts in
+  Settings › Users.
 - **Seerr:**
   - Accounts link automatically when a Seerr user has the same Jellyfin user id (Settings › Users ›
     *Match Seerr Users*). Otherwise choose the Seerr user manually.
   - Requests are sent *as* that Seerr user, so Seerr's own permissions, quotas and approval rules apply.
-- **Sign in with Jellyfin (optional):** in Settings › Users, enable *Allow Jellyfin sign-in*. Optionally
-  also enable *Create accounts automatically*.
+- **Sign in with Jellyfin:** on by default (Settings › Users › *Allow Jellyfin sign-in*). *Let everyone
+  on the Jellyfin server sign in* creates a member account on first sign-in; otherwise only people you
+  add or import can sign in.
 
 ### Add more people
 
-Settings › Users › **Add Person** creates either a local account with a password, or a Jellyfin-backed
-account that signs in with Jellyfin.
+Settings › Users › **Import from Jellyfin** creates member accounts for the Jellyfin users you pick.
+**Add Person** creates either a local account with a password, or a Jellyfin-backed account that
+signs in with Jellyfin.
 
 ## 4. Add watchlists
 

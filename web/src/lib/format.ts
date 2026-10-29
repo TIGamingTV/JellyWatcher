@@ -73,6 +73,7 @@ export const PROVIDER_NAME: Record<string, string> = {
   jellyfin: 'Jellyfin',
   seerr: 'Seerr',
   tmdb: 'TMDb',
+  local: 'JellyWatcher',
 };
 
 export const LIST_KIND_LABEL: Record<string, string> = {
@@ -82,4 +83,18 @@ export const LIST_KIND_LABEL: Record<string, string> = {
   public: 'Public list',
   upload: 'Imported file',
   diary: 'Diary (RSS)',
+  local: 'Your list',
 };
+
+/** Today's date as YYYY-MM-DD in local time, for date inputs. */
+export function todayInput(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** A date input value as an ISO time: now for today, local noon for other days. */
+export function watchedAtFromInput(value: string): string {
+  if (!value || value === todayInput()) return new Date().toISOString();
+  const [y, m, d] = value.split('-').map(Number) as [number, number, number];
+  return new Date(y, m - 1, d, 12, 0, 0).toISOString();
+}

@@ -26,7 +26,7 @@ export interface SourceItem {
   seasons?: number | null;
 }
 
-export type ListKind = 'watchlist' | 'owned' | 'liked' | 'public' | 'upload' | 'diary';
+export type ListKind = 'watchlist' | 'owned' | 'liked' | 'public' | 'upload' | 'diary' | 'local';
 
 export interface SourceListInfo {
   externalId: string;

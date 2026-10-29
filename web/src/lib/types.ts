@@ -26,6 +26,8 @@ export interface Me {
   csrfToken?: string;
   needsSetup: boolean;
   jellyfinLogin: boolean;
+  /** Jellyfin sign-in details, when signing in with Jellyfin is available. */
+  jellyfin: { serverName: string | null; quickConnect: boolean; autoCreate: boolean } | null;
   version: string;
   services?: { jellyfin: boolean; seerr: boolean; tmdb: boolean; trakt: boolean; metadata: 'tmdb' | 'seerr' | null };
   sources?: SourceDescriptor[];
@@ -50,8 +52,8 @@ export interface TitleCard {
 
 export interface ListView {
   id: number;
-  provider: 'trakt' | 'letterboxd' | 'imdb';
-  kind: 'watchlist' | 'owned' | 'liked' | 'public' | 'upload' | 'diary';
+  provider: 'trakt' | 'letterboxd' | 'imdb' | 'local';
+  kind: 'watchlist' | 'owned' | 'liked' | 'public' | 'upload' | 'diary' | 'local';
   name: string;
   description: string | null;
   ownerName: string | null;
@@ -67,8 +69,12 @@ export interface ListView {
   lastStatus: string | null;
   lastError: string | null;
   display: 'auto' | 'grid' | 'timeline';
-  /** Shown as a timeline (chosen, or guessed from the name). */
+  /** Shown as a timeline (the standard view unless the grid was chosen). */
   timeline: boolean;
+  /** Created in JellyWatcher: entries can be added and removed. */
+  editable: boolean;
+  /** Reordered by the person (kept across syncs). */
+  customOrder: boolean;
   summary: TimelineSummary | null;
   createdAt: string;
 }
@@ -108,6 +114,9 @@ export interface TimelineEntry {
   availability: AvailabilityState;
   stage: LifecycleStage;
   sourceUrl: string | null;
+  /** Date of the person's own watched mark covering this entry. */
+  manualAt: string | null;
+  watchedAt: string | null;
 }
 
 export interface Timeline {
@@ -158,6 +167,50 @@ export interface TitleDetail {
   requests: { id: number; requestedBy: string | null; requestStatus: number | null; mediaStatus: number | null; is4k: number; seasons: number[]; createdAt: string; syncedAt: string | null; lastError: string | null; mine: boolean }[];
   links: { jellyfin: string | null; seerr: string | null; tmdb: string | null; imdb: string | null };
   jellyfin: { itemId: string; addedAt: string | null } | null;
+  watch: WatchDetail;
+}
+
+export interface EpisodeWatch {
+  episode: number;
+  watched: boolean;
+  source: 'manual' | 'jellyfin' | null;
+  watchedAt: string | null;
+  inLibrary: boolean;
+}
+
+export interface SeasonWatch {
+  season: number;
+  episodes: number | null;
+  watched: number;
+  manualAt: string | null;
+  list: EpisodeWatch[];
+}
+
+export interface WatchDetail {
+  /** Date of a manual mark for the whole title. */
+  manualAt: string | null;
+  watchedAt: string | null;
+  seasons: SeasonWatch[];
+}
+
+export interface DiscoverResult {
+  tmdbId: number;
+  mediaType: MediaType;
+  title: string;
+  year: number | null;
+  overview: string | null;
+  posterPath: string | null;
+  posterUrl: string | null;
+  titleId: number | null;
+  inLibrary: boolean;
+  inList: boolean;
+}
+
+export interface QuickConnectStart {
+  id: string;
+  code: string;
+  expiresAt: string;
+  interval: number;
 }
 
 export interface Eligibility {
