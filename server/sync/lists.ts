@@ -1,5 +1,6 @@
 import type { AppContext } from '../context.js';
 import { ProviderError } from '../http/errors.js';
+import { ImdbClient } from '../providers/imdb.js';
 import { LetterboxdRssClient } from '../providers/letterboxd.js';
 import { listInfoFromJson, type TraktClient } from '../providers/trakt.js';
 import type { ListFetchResult } from '../providers/types.js';
@@ -54,6 +55,10 @@ export async function fetchList(ctx: AppContext, list: ListRow): Promise<ListFet
         return { info: listInfoFromJson(info, list.kind as 'liked' | 'public'), ...items };
       }
     }
+  }
+  if (list.provider === 'imdb') {
+    const ref = ctx.lists.ref<{ mode?: string; listId?: string }>(list);
+    if (ref.mode === 'graphql' && ref.listId) return new ImdbClient().list(ref.listId);
   }
   if (list.provider === 'letterboxd' && list.kind === 'diary') {
     const conn = ctx.connections.get(list.user_id, 'letterboxd');

@@ -114,6 +114,8 @@ function cleanup(ctx: AppContext) {
          AND id NOT IN (SELECT title_id FROM jellyfin_items WHERE title_id IS NOT NULL)
          AND id NOT IN (SELECT title_id FROM requests)
          AND id NOT IN (SELECT title_id FROM match_resolutions WHERE title_id IS NOT NULL)
+         AND id NOT IN (SELECT title_id FROM watch_history)
+         AND id NOT IN (SELECT title_id FROM watched_episodes)
          AND updated_at < ?`,
     )
     .run(new Date(Date.now() - 7 * 86400_000).toISOString()).changes;

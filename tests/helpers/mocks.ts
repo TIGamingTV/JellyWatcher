@@ -7,8 +7,9 @@ export const JF = { url: 'http://jellyfin.test:8096', key: 'jf-secret-key' };
 export const SEERR = { url: 'http://seerr.test:5055', key: 'seerr-secret-key' };
 export const ALICE_JF = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
 export const BOB_JF = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
-const HEAT_JF = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3';
-const SEV_JF = 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4';
+export const HEAT_JF = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3';
+export const SEV_JF = 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4';
+export const IMDB_LIST = 'ls020816781';
 
 export interface MockState {
   jellyfinDown: boolean;
@@ -16,6 +17,9 @@ export interface MockState {
   seerrMedia: Map<string, { id: number; tmdbId: number; mediaType: string; status: number }>;
   seerrCalls: { method: string; path: string; apiUser: string | null; body?: unknown }[];
   traktCalls: string[];
+  imdbCalls: { id: string; after: string | null }[];
+  /** Jellyfin item ids hidden from the library (simulates deleting after watching). */
+  jellyfinRemoved: Set<string>;
   logouts: number;
 }
 
@@ -29,13 +33,30 @@ export function createMocks() {
     seerrMedia: new Map([['movie:949', { id: 1, tmdbId: 949, mediaType: 'movie', status: 5 }]]),
     seerrCalls: [],
     traktCalls: [],
+    imdbCalls: [],
+    jellyfinRemoved: new Set(),
     logouts: 0,
   };
 
   const jellyfinItems = [
-    { Id: HEAT_JF, Name: 'Heat', ServerId: 'srv1', Type: 'Movie', ProductionYear: 1995, ProviderIds: { Tmdb: '949', Imdb: 'tt0113277' }, ImageTags: { Primary: 'p1' }, DateCreated: '2026-10-01T00:00:00Z' },
+    { Id: HEAT_JF, Name: 'Heat', ServerId: 'srv1', Type: 'Movie', ProductionYear: 1995, ProviderIds: { Tmdb: '949', Imdb: 'tt0113277' }, ImageTags: { Primary: 'p1' }, DateCreated: '2026-10-01T00:00:00Z', RunTimeTicks: 170 * 600_000_000 },
     { Id: SEV_JF, Name: 'Severance', ServerId: 'srv1', Type: 'Series', ProductionYear: 2022, ProviderIds: { Tmdb: '95396', Tvdb: '371980' }, RecursiveItemCount: 19, DateCreated: '2026-10-02T00:00:00Z' },
   ];
+  // Severance: season 1 (9 episodes, all watched) and season 2 (10 episodes, none watched).
+  const sevEpisodes = [
+    ...Array.from({ length: 9 }, (_, i) => ({ s: 1, e: i + 1, played: true })),
+    ...Array.from({ length: 10 }, (_, i) => ({ s: 2, e: i + 1, played: false })),
+  ].map((x) => ({
+    Id: `e${x.s}${String(x.e).padStart(2, '0')}`.padEnd(32, '0'),
+    Name: `Episode ${x.e}`,
+    Type: 'Episode',
+    SeriesId: SEV_JF,
+    ParentIndexNumber: x.s,
+    IndexNumber: x.e,
+    RunTimeTicks: 50 * 600_000_000,
+    LocationType: 'FileSystem',
+    UserData: { Played: x.played, LastPlayedDate: x.played ? '2026-09-01T00:00:00Z' : null },
+  }));
   const userData: Record<string, Record<string, unknown>> = {
     [HEAT_JF]: { Played: true, PlayCount: 1, PlayedPercentage: 100 },
     [SEV_JF]: { Played: false, UnplayedItemCount: 10, PlayedPercentage: 47 },
@@ -63,6 +84,7 @@ export function createMocks() {
       { id: 949, mediaType: 'movie', title: 'Heat', releaseDate: '1995-12-15', posterPath: '/heat.jpg' },
       { id: 70981, mediaType: 'movie', title: 'Heat', releaseDate: '1986-07-11' },
     ],
+    'imdb:tt11280740': [{ id: 95396, mediaType: 'tv', name: 'Severance', firstAirDate: '2022-02-18', posterPath: '/sev.jpg' }],
     dune: [
       { id: 438631, mediaType: 'movie', title: 'Dune', releaseDate: '2021-09-15', posterPath: '/dune.jpg' },
       { id: 841, mediaType: 'movie', title: 'Dune', releaseDate: '1984-12-14', posterPath: '/dune84.jpg' },
@@ -106,8 +128,13 @@ export function createMocks() {
           if (!authed) return new Response('', { status: 401 });
           const start = Number(url.searchParams.get('startIndex') ?? 0);
           const uid = url.searchParams.get('userId');
-          const items = jellyfinItems.slice(start).map((i) => (uid === ALICE_JF ? { ...i, UserData: userData[i.Id] } : uid ? { ...i, UserData: { Played: false } } : i));
-          return json({ Items: items, TotalRecordCount: jellyfinItems.length, StartIndex: start });
+          const items = jellyfinItems.filter((i) => !state.jellyfinRemoved.has(i.Id)).slice(start).map((i) => (uid === ALICE_JF ? { ...i, UserData: userData[i.Id] } : uid ? { ...i, UserData: { Played: false } } : i));
+          return json({ Items: items, TotalRecordCount: items.length, StartIndex: start });
+        }
+        case `/Shows/${SEV_JF}/Episodes`: {
+          if (!authed) return new Response('', { status: 401 });
+          const uid = url.searchParams.get('userId');
+          return json({ Items: sevEpisodes.map((e) => (uid === ALICE_JF ? e : { ...e, UserData: { Played: false } })), TotalRecordCount: sevEpisodes.length });
         }
         case '/UserItems/Resume':
           return json({ Items: [], TotalRecordCount: 0 });
@@ -183,6 +210,39 @@ export function createMocks() {
       }
       if (url.pathname.startsWith('/users/private')) return new Response('', { status: 404 });
       return new Response('', { status: 404 });
+    }
+
+    // ---- IMDb public GraphQL (list reads)
+    if (url.origin === 'https://api.graphql.imdb.com') {
+      if (!headers.get('x-imdb-client-name')) return new Response('<html>403 Forbidden</html>', { status: 403 });
+      const vars = body?.variables ?? {};
+      state.imdbCalls.push({ id: vars.id, after: vars.after ?? null });
+      if (vars.id === 'ls000000001') return json({ errors: [{ message: 'Permission denied', extensions: { code: 'FORBIDDEN' } }], data: { list: null } });
+      if (vars.id !== IMDB_LIST) return json({ errors: [{ message: 'Not found', extensions: { code: 'RESOURCE_NOT_FOUND' } }], data: { list: null } });
+      const t = (id: string, text: string, year: number, type: string, minutes: number, extra: Record<string, unknown> = {}) => ({
+        node: { createdDate: '2026-01-01T00:00:00Z', description: null, listItem: { id, titleText: { text }, releaseYear: { year }, titleType: { id: type }, runtime: { seconds: minutes * 60 }, episodes: null, series: null, ...extra } },
+      });
+      const all = [
+        t('tt0113277', 'Heat', 1995, 'movie', 170),
+        t('tt11650328', 'Good News About Hell', 2022, 'tvEpisode', 57, { series: { series: { id: 'tt11280740', titleText: { text: 'Severance' }, releaseYear: { year: 2022 } }, episodeNumber: { seasonNumber: 1, episodeNumber: 1 } } }),
+        t('tt0083190', 'Thief', 1981, 'movie', 123),
+        t('tt11280740', 'Severance', 2022, 'tvSeries', 50, { episodes: { episodes: { total: 19 }, displayableSeasons: { total: 2 } } }),
+        t('tt0000001', 'A Game', 2020, 'videoGame', 0),
+      ];
+      // Two pages to exercise the cursor.
+      const page = vars.after === 'c2' ? all.slice(3) : all.slice(0, 3);
+      return json({
+        data: {
+          list: {
+            id: IMDB_LIST,
+            name: { originalText: 'Mann Timeline' },
+            description: null,
+            author: { username: { text: 'someone' } },
+            visibility: { id: 'PUBLIC' },
+            items: { total: all.length, pageInfo: { hasNextPage: vars.after !== 'c2', endCursor: 'c2' }, edges: page },
+          },
+        },
+      });
     }
 
     if (url.hostname === 'image.tmdb.org') {

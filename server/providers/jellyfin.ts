@@ -70,6 +70,8 @@ export interface NormalizedJellyfinItem {
   imageTag: string | null;
   dateCreated: string | null;
   episodeCount: number | null;
+  /** Movie runtime, or the typical episode runtime of a series. */
+  runtimeTicks: number | null;
   overview: string | null;
   genres: string[];
 }
@@ -102,6 +104,7 @@ export function normalizeItem(raw: unknown): NormalizedJellyfinItem | null {
     imageTag: i.ImageTags?.Primary ?? null,
     dateCreated: i.DateCreated ?? null,
     episodeCount: mediaType === 'tv' ? (i.RecursiveItemCount ?? null) : null,
+    runtimeTicks: i.RunTimeTicks ?? null,
     overview: i.Overview ?? null,
     genres: i.Genres ?? [],
   };
@@ -135,6 +138,34 @@ export function normalizeUserData(raw: unknown): NormalizedUserData | null {
     lastPlayedAt: u.LastPlayedDate ?? null,
     isFavorite: u.IsFavorite ?? false,
     episodeCount: p.data.Type === 'Series' ? (p.data.RecursiveItemCount ?? null) : null,
+  };
+}
+
+export interface NormalizedEpisode {
+  id: string;
+  season: number;
+  episode: number;
+  /** Last episode number for multi-episode files (S01E01-E02), else the same as episode. */
+  episodeEnd: number;
+  runtimeTicks: number | null;
+  played: boolean;
+  lastPlayedAt: string | null;
+}
+
+export function normalizeEpisode(raw: unknown): NormalizedEpisode | null {
+  const p = Item.extend({ IndexNumberEnd: z.number().nullish(), LocationType: z.string().nullish() }).safeParse(raw);
+  if (!p.success) return null;
+  const e = p.data;
+  if (e.Type !== 'Episode' || e.ParentIndexNumber == null || e.IndexNumber == null) return null;
+  if (e.LocationType === 'Virtual') return null; // missing-episode placeholders are not in the library
+  return {
+    id: e.Id,
+    season: e.ParentIndexNumber,
+    episode: e.IndexNumber,
+    episodeEnd: Math.max(e.IndexNumber, e.IndexNumberEnd ?? e.IndexNumber),
+    runtimeTicks: e.RunTimeTicks ?? null,
+    played: e.UserData?.Played ?? false,
+    lastPlayedAt: e.UserData?.LastPlayedDate ?? null,
   };
 }
 
@@ -226,17 +257,17 @@ export class JellyfinClient {
     }
   }
 
-  async resume(userId: string, limit = 20): Promise<JellyfinItemJson[]> {
-    const res = await this.http.get('/UserItems/Resume', {
-      userId,
-      limit,
+  /** Every episode of a series, with the user's played state when a user id is given. */
+  async episodes(seriesId: string, userId?: string): Promise<NormalizedEpisode[]> {
+    const res = await this.http.get(`/Shows/${encodeURIComponent(seriesId)}/Episodes`, {
       fields: 'ProviderIds',
-      enableUserData: true,
-      mediaTypes: 'Video',
-      enableImageTypes: 'Primary',
+      enableUserData: Boolean(userId),
+      enableImages: false,
+      ...(userId ? { userId } : {}),
     });
-    const data = ItemsResult.parse(res.data);
-    return data.Items.map((i) => Item.safeParse(i)).filter((p) => p.success).map((p) => p.data);
+    const data = ItemsResult.safeParse(res.data);
+    if (!data.success) throw new ProviderError('jellyfin', 'invalid_response');
+    return data.data.Items.map(normalizeEpisode).filter((e): e is NormalizedEpisode => e !== null);
   }
 
   async image(itemId: string, opts: { tag?: string; maxWidth: number }): Promise<{ data: Buffer; contentType: string }> {

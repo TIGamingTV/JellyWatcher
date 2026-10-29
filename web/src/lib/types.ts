@@ -66,7 +66,65 @@ export interface ListView {
   lastAttemptAt: string | null;
   lastStatus: string | null;
   lastError: string | null;
+  display: 'auto' | 'grid' | 'timeline';
+  /** Shown as a timeline (chosen, or guessed from the name). */
+  timeline: boolean;
+  summary: TimelineSummary | null;
   createdAt: string;
+}
+
+export interface TimelineSummary {
+  entries: number;
+  films: number;
+  shows: number;
+  seasons: number;
+  episodes: number;
+  totalMinutes: number;
+  watchedMinutes: number;
+  remainingMinutes: number;
+  watchedEntries: number;
+  unknownRuntime: number;
+  unmatched: number;
+}
+
+export interface TimelineEntry {
+  itemId: number;
+  position: number;
+  kind: 'movie' | 'show' | 'season' | 'episode';
+  matched: boolean;
+  title: TitleCard | null;
+  sourceTitle: string;
+  year: number | null;
+  season: number | null;
+  episode: number | null;
+  episodeTitle: string | null;
+  episodes: number | null;
+  seasons: number | null;
+  watchedEpisodes: number | null;
+  runtime: number | null;
+  watchedMinutes: number;
+  state: 'watched' | 'in_progress' | 'unwatched';
+  percent: number;
+  availability: AvailabilityState;
+  stage: LifecycleStage;
+  sourceUrl: string | null;
+}
+
+export interface Timeline {
+  entries: TimelineEntry[];
+  summary: TimelineSummary;
+  nextIndex: number | null;
+}
+
+export interface UpNextItem {
+  list: { id: number; name: string; provider: string };
+  lists: { id: number; name: string; provider: string }[];
+  timeline: boolean;
+  position: number;
+  of: number;
+  remainingMinutes: number;
+  action: 'watch' | 'waiting' | 'request';
+  entry: TimelineEntry;
 }
 
 export interface TitleStatus {

@@ -103,6 +103,53 @@ export function UploadInstructions({ provider }: { provider: 'letterboxd' | 'imd
   );
 }
 
+/** Adds a list from a shared link (public IMDb lists, Trakt lists and watchlists). */
+export function LinkForm({ hint, placeholder, onAdded }: { hint?: string; placeholder?: string; onAdded?: (l: ListView) => void }) {
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
+  const invalidate = useInvalidateLists();
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await post<{ list: ListView }>('/lists/link', { url: url.trim() });
+      if (res.list.lastStatus === 'error') toast('error', `Added, but the first sync failed: ${res.list.lastError}`);
+      else toast('success', `Added “${res.list.name}” with ${plural(res.list.itemCount, 'entry', 'entries')}.`);
+      setUrl('');
+      invalidate();
+      onAdded?.(res.list);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form
+      className="stack"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <label className="field">
+        <span className="field-label">List link</span>
+        <div className="inline" style={{ flexWrap: 'nowrap' }}>
+          <input className="input" type="url" inputMode="url" placeholder={placeholder ?? 'https://www.imdb.com/list/ls… or https://trakt.tv/users/…/lists/…'} value={url} onChange={(e) => setUrl(e.target.value)} />
+          <button className="btn btn-primary" type="submit" disabled={!url.trim() || busy}>
+            {busy ? <Spinner /> : <Link2 size={15} aria-hidden />}
+            Add
+          </button>
+        </div>
+        <span className="field-hint">{hint ?? 'Paste a shared link to a public IMDb or Trakt list. No sign-in needed; the list keeps its order and syncs automatically.'}</span>
+      </label>
+      {error && <Banner kind="error">{error}</Banner>}
+    </form>
+  );
+}
+
 function TraktListRow({ l, onAdd, busy }: { l: TraktListInfo; onAdd: () => void; busy: boolean }) {
   return (
     <div className="row">
@@ -128,7 +175,6 @@ function TraktPanel({ sources, onAdded }: { sources: SourcesResponse; onAdded: (
   const src = sources.sources.find((s) => s.id === 'trakt')!;
   const connected = src.connection && src.connection.status !== 'needs_reauth';
   const [tab, setTab] = useState<'mine' | 'link' | 'search'>(connected ? 'mine' : 'link');
-  const [url, setUrl] = useState('');
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -144,7 +190,11 @@ function TraktPanel({ sources, onAdded }: { sources: SourcesResponse; onAdded: (
   });
 
   if (!src.available) {
-    return <Banner kind="warn" title="Trakt isn’t set up yet">An administrator needs to register a Trakt API app in Integrations › Trakt before lists can be added.</Banner>;
+    return (
+      <Banner kind="warn" title="Trakt isn’t set up yet">
+        Trakt only answers apps with a Client ID, so an administrator needs to register a free Trakt API app once in Integrations › Trakt. After that, anyone can add public Trakt lists by link without a Trakt account.
+      </Banner>
+    );
   }
 
   const add = async (body: Record<string, unknown>, key: string) => {
@@ -213,25 +263,14 @@ function TraktPanel({ sources, onAdded }: { sources: SourcesResponse; onAdded: (
           )
         ))}
       {tab === 'link' && (
-        <form
-          className="stack"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void add({ mode: 'url', url: url.trim() }, 'url');
+        <LinkForm
+          placeholder="https://trakt.tv/users/name/lists/list-name"
+          hint="Any public list works without connecting your Trakt account: franchises, watch orders, filmographies, community lists. A user’s public watchlist link works too."
+          onAdded={(l) => {
+            void mine.refetch();
+            onAdded(l);
           }}
-        >
-          <label className="field">
-            <span className="field-label">Trakt list link</span>
-            <input className="input" type="url" inputMode="url" placeholder="https://trakt.tv/users/name/lists/list-name" value={url} onChange={(e) => setUrl(e.target.value)} />
-            <span className="field-hint">Any public list works: franchises, filmographies, curated or community lists. A user’s public watchlist link works too.</span>
-          </label>
-          <div className="form-actions">
-            <button className="btn btn-primary" type="submit" disabled={!url || busyId === 'url'}>
-              {busyId === 'url' ? <Spinner /> : <Link2 size={15} aria-hidden />}
-              Add List
-            </button>
-          </div>
-        </form>
+        />
       )}
       {tab === 'search' && (
         <>
@@ -284,6 +323,9 @@ export function AddListSheet({ open, onClose, initial }: { open: boolean; onClos
       {!sources.data ? (
         <Spinner />
       ) : !provider ? (
+        <div className="stack-l">
+        <LinkForm onAdded={() => undefined} />
+        <div className="group-title" style={{ margin: '0 4px -16px' }}>Or choose a source</div>
         <div className="group" style={{ background: 'var(--surface-2)' }}>
           {sources.data.sources.map((s) => (
             <button key={s.id} className="row row-link" style={{ width: '100%', border: 0, background: 'none', textAlign: 'left', cursor: 'pointer' }} onClick={() => setProvider(s.id)}>
@@ -299,6 +341,7 @@ export function AddListSheet({ open, onClose, initial }: { open: boolean; onClos
             </button>
           ))}
         </div>
+        </div>
       ) : (
         <div className="stack-l">
           {!initial && (
@@ -308,6 +351,13 @@ export function AddListSheet({ open, onClose, initial }: { open: boolean; onClos
           )}
           {provider === 'trakt' ? (
             <TraktPanel sources={sources.data} onAdded={() => undefined} />
+          ) : provider === 'imdb' ? (
+            <>
+              <LinkForm placeholder="https://www.imdb.com/list/ls020816781/" hint="Public IMDb lists work by link: no IMDb account needed, the order is kept (great for watch-order timelines), episodes are included, and the list syncs automatically." />
+              <div className="group-title" style={{ margin: '0 4px -12px' }}>Private lists and your watchlist</div>
+              <UploadInstructions provider={provider} />
+              <UploadBox provider={provider} />
+            </>
           ) : (
             <>
               <UploadInstructions provider={provider} />

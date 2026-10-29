@@ -4,13 +4,14 @@ import type { AppDeps } from '../app.js';
 import type { AppContext } from '../context.js';
 import { ApiError, ProviderError } from '../http/errors.js';
 import { IdParam, parse } from '../http/validate.js';
-import { parseImdbCsv } from '../providers/imdb.js';
+import { ImdbClient, parseImdbCsv, parseImdbListUrl } from '../providers/imdb.js';
 import { LETTERBOXD_USERNAME, LetterboxdRssClient, UploadError, parseLetterboxdCsv, parseLetterboxdZip } from '../providers/letterboxd.js';
 import { listInfoFromJson, parseTraktListUrl } from '../providers/trakt.js';
 import { decodeText } from '../providers/csv.js';
 import { SOURCE_DESCRIPTORS, type ListFetchResult, type SourceListInfo } from '../providers/types.js';
 import { requireUser, type SessionUser } from '../security/auth.js';
-import type { ListRow } from '../services/lists.js';
+import { isTimeline, type ListRow } from '../services/lists.js';
+import { buildTimelines, type TimelineSummary } from '../services/timeline.js';
 import { syncList, type TraktListRef } from '../sync/lists.js';
 import { triggerJob } from '../sync/scheduler.js';
 
@@ -21,7 +22,7 @@ interface PendingDevice {
   nextPollAt: number;
 }
 
-export function listView(ctx: AppContext, l: ListRow) {
+export function listView(ctx: AppContext, l: ListRow, summary?: TimelineSummary) {
   const counts = ctx.db
     .prepare(
       `SELECT SUM(match_status = 'matched') AS matched, SUM(match_status IN ('review', 'unmatched')) AS review, SUM(match_status = 'pending') AS pending
@@ -46,6 +47,9 @@ export function listView(ctx: AppContext, l: ListRow) {
     lastAttemptAt: l.last_attempt_at,
     lastStatus: l.last_status,
     lastError: l.last_error,
+    display: l.display,
+    timeline: isTimeline(l),
+    summary: summary ?? null,
     createdAt: l.created_at,
   };
 }
@@ -169,16 +173,15 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users }: AppDeps
     return { lists: lists.map((l) => ({ ...l, imported: have.has(l.externalId) })) };
   });
 
-  app.post('/lists/trakt', async (req) => {
-    const u = requireUser(req);
-    const body = parse(
-      z.discriminatedUnion('mode', [
-        z.object({ mode: z.literal('watchlist') }),
-        z.object({ mode: z.enum(['owned', 'liked', 'public']), traktId: z.number().int().positive() }),
-        z.object({ mode: z.literal('url'), url: z.string().trim().url().max(500) }),
-      ]),
-      req.body,
-    );
+  const TraktImport = z.discriminatedUnion('mode', [
+    z.object({ mode: z.literal('watchlist') }),
+    z.object({ mode: z.enum(['owned', 'liked', 'public']), traktId: z.number().int().positive() }),
+    z.object({ mode: z.literal('url'), url: z.string().trim().url().max(500) }),
+  ]);
+
+  app.post('/lists/trakt', async (req) => importTrakt(requireUser(req), parse(TraktImport, req.body)));
+
+  async function importTrakt(u: SessionUser, body: z.infer<typeof TraktImport>) {
     const client = traktClient();
     const conn = ctx.connections.get(u.id, 'trakt');
     const token = conn ? await ctx.connections.traktAccessToken(conn, client).catch(() => undefined) : undefined;
@@ -221,6 +224,41 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users }: AppDeps
       ref = { mode, traktId: json.ids.trakt, ownerSlug: ownerSlug ?? undefined };
     }
     return importAndSync(u, info, ref, conn?.id);
+  }
+
+  // ---- IMDb public lists by link (no account or key) -------------------------------------
+  async function importImdb(u: SessionUser, url: string) {
+    const listId = parseImdbListUrl(url);
+    if (!listId) throw new ApiError(400, 'invalid_url', 'Paste an IMDb list link, like https://www.imdb.com/list/ls020816781/.');
+    let result: ListFetchResult;
+    try {
+      result = await new ImdbClient().list(listId);
+    } catch (err) {
+      if (err instanceof ProviderError && (err.kind === 'not_found' || err.kind === 'forbidden')) throw new ApiError(404, 'list_not_found', err.message);
+      throw err;
+    }
+    const id = ctx.lists.upsert(u.id, 'imdb', result.info, { sourceRef: { mode: 'graphql', listId } });
+    // Lists first imported from a CSV become syncable once added by link.
+    ctx.db.prepare('UPDATE lists SET sync_supported = 1 WHERE id = ?').run(id);
+    ctx.lists.applyItems(id, result);
+    ctx.activity.add(u.id, 'list_imported', `Imported the IMDb list “${result.info.name}”.`);
+    void triggerJob(ctx, 'match', 'event');
+    return { list: listView(ctx, ctx.lists.get(id)!) };
+  }
+
+  app.post('/lists/imdb', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req) => {
+    const u = requireUser(req);
+    const body = parse(z.object({ url: z.string().trim().min(4).max(500) }), req.body);
+    return importImdb(u, body.url);
+  });
+
+  /** One field for any supported link: IMDb lists and Trakt lists or watchlists. */
+  app.post('/lists/link', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req) => {
+    const u = requireUser(req);
+    const body = parse(z.object({ url: z.string().trim().min(4).max(500) }), req.body);
+    if (parseImdbListUrl(body.url)) return importImdb(u, body.url);
+    if (parseTraktListUrl(body.url)) return importTrakt(u, { mode: 'url', url: body.url });
+    throw new ApiError(400, 'invalid_url', 'Paste a link to a public IMDb list (imdb.com/list/ls…) or a Trakt list (trakt.tv/users/…/lists/…).');
   });
 
   async function importAndSync(u: SessionUser, info: SourceListInfo, ref: TraktListRef, connectionId?: number) {
@@ -352,7 +390,9 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users }: AppDeps
   // ---- Lists ---------------------------------------------------------------------------
   app.get('/lists', async (req) => {
     const u = requireUser(req);
-    return { lists: ctx.lists.forUser(u.id).map((l) => listView(ctx, l)) };
+    const lists = ctx.lists.forUser(u.id);
+    const timelines = buildTimelines(ctx, u, lists);
+    return { lists: lists.map((l) => listView(ctx, l, timelines.get(l.id)?.summary)) };
   });
 
   app.get('/lists/:id', async (req) => {
@@ -360,17 +400,30 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users }: AppDeps
     const { id } = parse(IdParam, req.params);
     const l = ctx.lists.getOwned(id, u.id);
     if (!l) throw new ApiError(404, 'not_found', 'List not found.');
-    return { list: listView(ctx, l) };
+    return { list: listView(ctx, l, buildTimelines(ctx, u, [l]).get(l.id)?.summary) };
+  });
+
+  /** Every entry in list order with sizes, watch time and progress. */
+  app.get('/lists/:id/timeline', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    const l = ctx.lists.getOwned(id, u.id);
+    if (!l) throw new ApiError(404, 'not_found', 'List not found.');
+    return buildTimelines(ctx, u, [l]).get(l.id)!;
   });
 
   app.patch('/lists/:id', async (req) => {
     const u = requireUser(req);
     const { id } = parse(IdParam, req.params);
-    const body = parse(z.object({ name: z.string().trim().min(1).max(120).optional(), autoSync: z.boolean().optional() }), req.body);
+    const body = parse(
+      z.object({ name: z.string().trim().min(1).max(120).optional(), autoSync: z.boolean().optional(), display: z.enum(['auto', 'grid', 'timeline']).optional() }),
+      req.body,
+    );
     const l = ctx.lists.getOwned(id, u.id);
     if (!l) throw new ApiError(404, 'not_found', 'List not found.');
     if (body.name) ctx.lists.rename(id, body.name);
     if (body.autoSync !== undefined) ctx.lists.setAutoSync(id, body.autoSync);
+    if (body.display) ctx.lists.setDisplay(id, body.display);
     return { list: listView(ctx, ctx.lists.get(id)!) };
   });
 

@@ -15,6 +15,15 @@ export interface SourceItem {
   notes?: string | null;
   rating?: number | null;
   watchedAt?: string | null;
+  /** Set when the entry is one season (or, with episodeNumber, one episode) of a show. */
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+  episodeTitle?: string | null;
+  /** Minutes per movie, or per episode for shows, as reported by the source. */
+  runtime?: number | null;
+  /** Size of a whole-series entry as reported by the source. */
+  episodes?: number | null;
+  seasons?: number | null;
 }
 
 export type ListKind = 'watchlist' | 'owned' | 'liked' | 'public' | 'upload' | 'diary';
@@ -33,7 +42,7 @@ export interface SourceListInfo {
 export interface ListFetchResult {
   info: SourceListInfo;
   items: SourceItem[];
-  /** Items the source returned but that cannot be represented (episodes, people, games). */
+  /** Items the source returned but that cannot be represented (people, games, podcasts). */
   skipped: number;
 }
 
@@ -64,6 +73,7 @@ export const SOURCE_DESCRIPTORS: SourceDescriptor[] = [
     limitations: [
       'An administrator must register a Trakt API app once (Integrations › Trakt).',
       'Free Trakt accounts can connect at most two community apps.',
+      'Every Trakt request needs that app’s Client ID; Trakt rejects requests without one. Public lists need nothing else, no Trakt sign-in.',
       'Trakt limits API use to 500 requests per 5 minutes; large libraries sync gradually.',
       'Link-only (unlisted) lists are not supported by the documented API.',
     ],
@@ -85,13 +95,14 @@ export const SOURCE_DESCRIPTORS: SourceDescriptor[] = [
   {
     id: 'imdb',
     name: 'IMDb',
-    summary: 'Import your IMDb watchlist, lists or ratings from the CSV file IMDb exports.',
-    method: 'Upload of the CSV file produced by IMDb’s Export button',
-    capabilities: { oauth: false, autoSync: false, upload: true, publicLists: false, urlImport: false, listSearch: false },
+    summary: 'Add any public IMDb list by its link, or import your watchlist, lists or ratings from an IMDb CSV export.',
+    method: 'Public list link (no account or key needed), or upload of the CSV from IMDb’s Export button',
+    capabilities: { oauth: false, autoSync: true, upload: true, publicLists: true, urlImport: true, listSearch: false },
     limitations: [
-      'IMDb offers no API for personal lists and blocks automated access.',
-      'Lists update only when you upload a new export.',
-      'Episodes, games and podcasts in exports are skipped.',
+      'Links work for public lists (imdb.com/list/ls…). They sync automatically, keep the list order, and include episodes.',
+      'Watchlists are private on IMDb unless shared, so import them from a CSV export instead.',
+      'Uploaded files update only when you upload a new export, and their episodes are skipped (the CSV has no show information).',
+      'IMDb data is for personal, non-commercial use.',
     ],
   },
 ];

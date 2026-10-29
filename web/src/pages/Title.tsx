@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ExternalLink, Play, Plus, RefreshCw, Star } from 'lucide-react';
 import { REQUEST_STATE_LABEL, type LifecycleStage } from '../../../shared/status';
@@ -11,17 +11,6 @@ import { Banner, CenterLoading, ErrorState, Sheet, Spinner, Time } from '../comp
 import { PosterImage } from '../components/Poster';
 import { RequestPill, StagePill, availabilityLabel, viewingLabel } from '../components/status';
 import { mapSeerrRequest } from '../../../shared/status';
-
-export function TitleLookup() {
-  const { type, tmdbId } = useParams();
-  const navigate = useNavigate();
-  const q = useQuery({ queryKey: ['lookup', type, tmdbId], queryFn: () => get<{ id: number }>(`/titles/lookup/${type}/${tmdbId}`) });
-  useEffect(() => {
-    if (q.data) navigate(`/titles/${q.data.id}`, { replace: true });
-  }, [q.data, navigate]);
-  if (q.isError) return <ErrorState error={q.error} />;
-  return <CenterLoading />;
-}
 
 const TRACK = ['On Watchlist', 'Requested', 'Processing', 'In Library', 'Watched'] as const;
 
@@ -76,7 +65,14 @@ export function TitlePage() {
   const id = Number(useParams().id);
   const navigate = useNavigate();
   const { user } = useUser();
-  const [requesting, setRequesting] = useState(false);
+  const [params, setParams] = useSearchParams();
+  // Deep link from Up Next: /titles/:id?request=1&season=2 opens the request sheet with that season.
+  const [requesting, setRequesting] = useState(params.get('request') === '1');
+  const presetSeason = params.get('season') ? Number(params.get('season')) : null;
+  const closeRequest = () => {
+    setRequesting(false);
+    if (params.has('request')) setParams({}, { replace: true });
+  };
   const q = useQuery({ queryKey: ['title', id], queryFn: () => get<TitleDetail>(`/titles/${id}`) });
   const d = q.data;
   useEffect(() => {
@@ -267,12 +263,12 @@ export function TitlePage() {
         </section>
       </div>
 
-      {requesting && <RequestSheet titleId={id} title={t.title} mediaType={t.mediaType} onClose={() => setRequesting(false)} />}
+      {requesting && <RequestSheet titleId={id} title={t.title} mediaType={t.mediaType} preset={presetSeason !== null && presetSeason > 0 ? [presetSeason] : null} onClose={closeRequest} />}
     </>
   );
 }
 
-function RequestSheet({ titleId, title, mediaType, onClose }: { titleId: number; title: string; mediaType: 'movie' | 'tv'; onClose: () => void }) {
+function RequestSheet({ titleId, title, mediaType, preset, onClose }: { titleId: number; title: string; mediaType: 'movie' | 'tv'; preset: number[] | null; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const e = useQuery({ queryKey: ['eligibility', titleId], queryFn: () => get<Eligibility>(`/titles/${titleId}/eligibility`), staleTime: 0, gcTime: 0 });
@@ -282,7 +278,8 @@ function RequestSheet({ titleId, title, mediaType, onClose }: { titleId: number;
   const [done, setDone] = useState<string | null>(null);
 
   const requestable = e.data?.seasons.filter((s) => s.requestable).map((s) => s.seasonNumber) ?? [];
-  const chosen = seasons ?? requestable;
+  const presetRequestable = preset?.filter((n) => requestable.includes(n)) ?? [];
+  const chosen = seasons ?? (presetRequestable.length > 0 ? presetRequestable : requestable);
 
   const submit = async () => {
     setBusy(true);

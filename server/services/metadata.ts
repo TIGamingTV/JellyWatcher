@@ -1,6 +1,6 @@
 import type { MatchCandidate, MediaType } from '../domain/matching.js';
 import type { SeerrClient, SeerrDetails } from '../providers/seerr.js';
-import type { TitleMetadata, TmdbClient } from '../providers/tmdb.js';
+import { showTotals, type TitleMetadata, type TmdbClient } from '../providers/tmdb.js';
 import type { IntegrationStore } from './integrations.js';
 
 /**
@@ -14,7 +14,6 @@ export interface MetadataSource {
   search(mediaType: MediaType, title: string, year: number | null): Promise<MatchCandidate[]>;
   searchAny(query: string, page: number): Promise<{ results: MatchCandidate[]; totalPages: number }>;
   details(mediaType: MediaType, tmdbId: number): Promise<TitleMetadata | null>;
-  trending(): Promise<MatchCandidate[]>;
 }
 
 class TmdbSource implements MetadataSource {
@@ -37,13 +36,11 @@ class TmdbSource implements MetadataSource {
   details(t: MediaType, id: number) {
     return this.c.details(t, id);
   }
-  trending() {
-    return this.c.trending('all', 'week');
-  }
 }
 
 export function seerrDetailsToMetadata(mediaType: MediaType, d: SeerrDetails): TitleMetadata {
   const release = d.releaseDate ?? d.firstAirDate ?? null;
+  const seasons = d.seasons?.map((s) => ({ seasonNumber: s.seasonNumber, name: s.name ?? null, episodeCount: s.episodeCount ?? null, airDate: s.airDate ?? null }));
   return {
     tmdbId: d.id,
     mediaType,
@@ -55,10 +52,11 @@ export function seerrDetailsToMetadata(mediaType: MediaType, d: SeerrDetails): T
     posterPath: d.posterPath ?? null,
     backdropPath: d.backdropPath ?? null,
     genres: (d.genres ?? []).map((g) => g.name),
-    runtime: d.runtime ?? d.episodeRunTime?.[0] ?? null,
+    runtime: d.runtime || d.episodeRunTime?.[0] || d.lastEpisodeToAir?.runtime || null,
     imdbId: d.imdbId ?? d.externalIds?.imdbId ?? null,
     tvdbId: d.externalIds?.tvdbId ?? null,
-    seasons: d.seasons?.map((s) => ({ seasonNumber: s.seasonNumber, name: s.name ?? null, episodeCount: s.episodeCount ?? null, airDate: s.airDate ?? null })),
+    seasons,
+    ...(mediaType === 'tv' ? showTotals(seasons, d.numberOfEpisodes, d.numberOfSeasons) : {}),
   };
 }
 
@@ -85,25 +83,6 @@ class SeerrSource implements MetadataSource {
       if ((err as { kind?: string }).kind === 'not_found') return null;
       throw err;
     }
-  }
-  async trending() {
-    // Seerr's discover endpoint; tolerated if a deployment does not expose it.
-    const res = await this.c.http.get('/discover/trending', { page: 1 });
-    const results = (res.data as { results?: unknown[] })?.results ?? [];
-    const hits: MatchCandidate[] = [];
-    for (const r of results as Record<string, unknown>[]) {
-      if (r.mediaType !== 'movie' && r.mediaType !== 'tv') continue;
-      const date = (r.releaseDate ?? r.firstAirDate) as string | undefined;
-      hits.push({
-        tmdbId: Number(r.id),
-        mediaType: r.mediaType,
-        title: String(r.title ?? r.name ?? ''),
-        year: date && /^\d{4}/.test(date) ? Number(date.slice(0, 4)) : null,
-        posterPath: (r.posterPath as string) ?? null,
-        overview: (r.overview as string) ?? null,
-      });
-    }
-    return hits;
   }
 }
 

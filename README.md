@@ -1,22 +1,26 @@
 # JellyWatcher
 
-A self-hosted hub for your movie and TV watchlists. JellyWatcher combines lists from **Trakt**,
-**Letterboxd** and **IMDb** into one catalog without duplicates. It shows what's already in
-**Jellyfin**, what you've watched, and what's been requested, and lets you request the rest through
-**Seerr** one title at a time.
+A self-hosted hub for your movie and TV watchlists. JellyWatcher brings in lists from **Trakt**,
+**Letterboxd** and **IMDb**, keeps their order, and matches every entry to one title without
+duplicates. It shows what's already in **Jellyfin**, what you've watched, and what's been requested,
+and lets you request the next thing on each list through **Seerr**.
 
 Runs as one Docker container with one data volume. Everything is configured in the web UI.
 
 ## Features
 
 - **Watchlists:**
-  - Trakt watchlist, your own lists, liked lists, and any public list by link or search (franchises, filmographies, community lists).
-  - Letterboxd and IMDb exports.
-  - Letterboxd RSS diary.
-  - Each list syncs on its own.
-- **One catalog:** deduplicated by TMDb and IMDb ids, with fuzzy title and year matching and a review
-  queue for uncertain matches. Your match decisions are remembered.
-- **Search and filters:** title, type, source, genre, library state, request state, watched state, and sorting.
+  - Add a list by pasting its link: any public **IMDb list** or **Trakt list**, no sign-in needed.
+  - Trakt watchlist, your own lists, liked lists, and public list search.
+  - Letterboxd and IMDb exports, and the Letterboxd RSS diary.
+  - Each list keeps its order and syncs on its own.
+- **Timelines:** watch-order lists (e.g. a franchise in story order) are shown as a timeline with
+  every movie, show, season and episode in order, the film / show / season / episode counts, and the
+  total watch time counting down as you watch. Any list can be switched between timeline and grid.
+- **Up Next:** the next unwatched entry of every list on Home, with a one-click request.
+- **Matching:** by TMDb and IMDb ids, with fuzzy title and year matching and a review queue for
+  uncertain matches. Your match decisions are remembered.
+- **Search and filters** per list: title, type, genre, library state, request state, watched state, and sorting.
 - **Requests via Seerr:**
   - A live eligibility check prevents duplicates.
   - For shows, you choose which seasons to request.
@@ -25,7 +29,9 @@ Runs as one Docker container with one data volume. Everything is configured in t
 - **Lifecycle tracking:** On Watchlist → Requested → Processing → In Library → Watched. Each status
   comes from its authoritative service (Seerr for requests, Jellyfin for library and progress) and
   shows when it was synced. Out-of-date data is marked as such.
-- **Library and Continue Watching** from Jellyfin, for your linked account.
+- **Watched stays watched:** viewing history is remembered, so deleting a watched title in Seerr,
+  Sonarr or Radarr afterwards doesn't reset it.
+- **Library** from Jellyfin, for your linked account.
 - **Multi-user:**
   - Local or Jellyfin sign-in.
   - Private per-user lists and connections.
@@ -39,7 +45,7 @@ Runs as one Docker container with one data volume. Everything is configured in t
 ## Setup
 
 Requirements: Docker with Compose v2.24 or newer. Images for `linux/amd64` and `linux/arm64` are
-published to `ghcr.io/tigamingtv/jellywatcher` (tags: `latest`, `0.1.0`, `0.1`).
+published to `ghcr.io/tigamingtv/jellywatcher` (tags: `latest`, `0.2.0`, `0.2`).
 
 ### 1. Create `compose.yaml`
 
@@ -48,7 +54,7 @@ Create a folder (e.g. `jellywatcher/`) with this `compose.yaml`:
 ```yaml
 services:
   jellywatcher:
-    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.1.0
+    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.2.0
     container_name: jellywatcher
     restart: unless-stopped
     init: true
@@ -98,7 +104,8 @@ docker compose logs jellywatcher | grep "setup code"
 1. Open `http://<host>:8484`, enter the setup code, and create the administrator.
 2. Under **Integrations**, connect Jellyfin (URL + API key) and Seerr (URL + API key). TMDb and
    Trakt are optional.
-3. Under **Watchlists › Add List**, add Trakt lists or upload Letterboxd / IMDb exports.
+3. Under **Watchlists › Add List**, paste a list link (IMDb or Trakt), connect Trakt, or upload
+   Letterboxd / IMDb exports.
 
 The full guide, including account linking, webhooks and all environment variables, is in
 [docs/setup.md](docs/setup.md). For upgrades, backups and reverse proxies see
@@ -124,16 +131,19 @@ docker compose up -d --build
 
 | Service | Method | Sync |
 | --- | --- | --- |
-| Trakt | Official API, device sign-in (admin registers one Trakt app) | Automatic |
+| Trakt | Official API (admin registers one Trakt app). Public lists by link; sign-in for your own lists | Automatic |
 | Letterboxd | Your export ZIP or CSV, plus your public RSS diary | Uploads: manual. RSS: automatic |
-| IMDb | The CSV from IMDb's Export button | Manual (re-upload) |
+| IMDb | Public lists by link (IMDb's public list API), or the CSV from IMDb's Export button | Links: automatic. Uploads: manual |
 | Seerr | REST API key, requests made as each linked user | Polling, plus an optional webhook |
 | Jellyfin | REST API key, plus per-user account linking | Polling, plus an optional webhook |
 | TMDb | Optional; Seerr's TMDb access is used otherwise | — |
 
-Letterboxd and IMDb don't offer an API for personal projects, and their terms prohibit scraping. So
-JellyWatcher imports only files you export yourself and never fetches their sites. Importing other
-people's Letterboxd lists is not supported.
+Letterboxd doesn't offer an API for personal projects and its terms prohibit scraping, so
+JellyWatcher imports only files you export yourself. Importing other people's Letterboxd lists is not
+supported. IMDb public lists are read through the same public list API the IMDb website uses (no
+scraping, no key); IMDb allows only personal, non-commercial use of that data. Trakt answers only
+registered apps, so public Trakt links need the Trakt app an administrator sets up once, but no
+Trakt account for the person adding the list.
 
 Details, sources and verified limitations: [docs/integration-matrix.md](docs/integration-matrix.md).
 
@@ -151,12 +161,12 @@ Details, sources and verified limitations: [docs/integration-matrix.md](docs/int
 ```bash
 npm install
 npm run dev      # API :8484 + UI :5173
-npm test         # 77 unit and end-to-end tests (mocked Jellyfin, Seerr, Trakt)
+npm test         # unit and end-to-end tests (mocked Jellyfin, Seerr, Trakt, IMDb)
 npm run build
 ```
 
-Releases: set `version` in `package.json`, then push a matching tag (`git tag v0.1.0 && git push
-origin v0.1.0`). The [release workflow](.github/workflows/release.yml) tests, publishes the
+Releases: set `version` in `package.json`, then push a matching tag (`git tag v0.2.0 && git push
+origin v0.2.0`). The [release workflow](.github/workflows/release.yml) tests, publishes the
 multi-arch image to GHCR, and creates the GitHub release.
 
 ## Attribution

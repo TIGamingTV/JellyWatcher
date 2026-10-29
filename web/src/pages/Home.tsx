@@ -1,18 +1,20 @@
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Check, Circle, ListVideo, Sparkles } from 'lucide-react';
+import { ArrowRight, Check, Circle, ListVideo, Play, Plus, Sparkles } from 'lucide-react';
 import { get } from '../lib/api';
 import { useUser } from '../lib/session';
-import type { TitleCard } from '../lib/types';
+import type { TitleCard, UpNextItem } from '../lib/types';
+import { duration } from '../lib/format';
 import { Banner, CenterLoading, ErrorState, PageHeader, Time } from '../components/ui';
 import { PosterImage, Shelf } from '../components/Poster';
+import { StagePill } from '../components/status';
+import { entryFacts, entryHeading } from '../components/Timeline';
 
 interface HomeData {
   counts: { watchlist: number; review: number; lists: number };
   recentlyAvailable: TitleCard[];
   activeRequests: TitleCard[];
-  continueWatching: { titleId: number | null; jellyfinItemId?: string; name: string; episode: string | null; percent: number | null; imageUrl: string | null }[];
-  continueSource: 'live' | 'synced' | 'unavailable';
+  upNext: UpNextItem[];
   activity: { id: number; kind: string; message: string; createdAt: string; titleId: number | null }[];
   attention: { kind: string; message: string; href: string }[];
 }
@@ -86,42 +88,21 @@ export function HomePage() {
             </div>
           )}
 
-          {q.data.continueWatching.length > 0 && (
-            <section className="section" aria-labelledby="cw">
+          {q.data.upNext.length > 0 && (
+            <section className="section" aria-labelledby="up-next">
               <div className="section-head">
-                <h2 className="title-2" id="cw">
-                  Continue Watching
+                <h2 className="title-2" id="up-next">
+                  Up Next
                 </h2>
-                <span className="footnote secondary">{q.data.continueSource === 'live' ? 'From Jellyfin, live' : 'From the last Jellyfin sync'}</span>
+                <Link to="/watchlists/lists">All Lists</Link>
               </div>
-              <div className="shelf" style={{ gridAutoColumns: 'minmax(220px, 260px)' }}>
-                {q.data.continueWatching.map((c, i) => {
-                  const body = (
-                    <>
-                      <div className="poster-frame" style={{ aspectRatio: '16 / 10' }}>
-                        <PosterImage src={c.imageUrl ? `${c.imageUrl}?w=500` : null} alt="" fallback={c.name} />
-                        {c.percent !== null && (
-                          <span className="poster-progress" aria-hidden>
-                            <i style={{ width: `${c.percent}%` }} />
-                          </span>
-                        )}
-                      </div>
-                      <div className="poster-meta">
-                        <div className="poster-title">{c.name}</div>
-                        <div className="poster-sub">{c.episode ?? (c.percent !== null ? `${c.percent}% watched` : 'In progress')}</div>
-                      </div>
-                    </>
-                  );
-                  return c.titleId ? (
-                    <Link key={i} to={`/titles/${c.titleId}`} className="poster-card" aria-label={`${c.name}${c.episode ? `, ${c.episode}` : ''}${c.percent !== null ? `, ${c.percent}% watched` : ''}`}>
-                      {body}
-                    </Link>
-                  ) : (
-                    <div key={i} className="poster-card">
-                      {body}
-                    </div>
-                  );
-                })}
+              <p className="footnote secondary" style={{ marginTop: -8 }}>
+                The next unwatched entry on each of your lists, in list order.
+              </p>
+              <div className="shelf up-next">
+                {q.data.upNext.map((u) => (
+                  <UpNextCard key={`${u.list.id}-${u.entry.itemId}`} item={u} />
+                ))}
               </div>
             </section>
           )}
@@ -132,7 +113,6 @@ export function HomePage() {
                 <h2 className="title-2" id="ra">
                   Ready to Watch
                 </h2>
-                <Link to="/watchlists?availability=in_library">See All</Link>
               </div>
               <p className="footnote secondary" style={{ marginTop: -8 }}>
                 From your watchlists, newest in Jellyfin first.
@@ -203,5 +183,53 @@ export function HomePage() {
         </>
       )}
     </>
+  );
+}
+
+function UpNextCard({ item }: { item: UpNextItem }) {
+  const e = item.entry;
+  const t = e.title!;
+  const { title, part } = entryHeading(e);
+  const facts = entryFacts(e);
+  const seasonParam = e.season !== null && e.season > 0 ? `&season=${e.season}` : '';
+  const others = item.lists.length - 1;
+  return (
+    <article className="up-card" aria-label={`${title}${part ? `, ${part}` : ''}, next on ${item.list.name}`}>
+      <Link to={`/titles/${t.id}`} className="poster-frame" tabIndex={-1} aria-hidden>
+        <PosterImage src={t.posterUrl} alt="" fallback={title} />
+        {e.state === 'in_progress' && (
+          <span className="poster-progress">
+            <i style={{ width: `${e.percent}%` }} />
+          </span>
+        )}
+      </Link>
+      <div className="up-meta">
+        <div className="up-list">
+          <Link to={`/watchlists/lists/${item.list.id}`} style={{ color: 'inherit' }}>
+            {item.list.name}
+          </Link>
+          {others > 0 && ` +${others}`} · {item.position} of {item.of}
+        </div>
+        <Link to={`/titles/${t.id}`} className="tl-title" style={{ color: 'inherit' }}>
+          {title}
+        </Link>
+        {part && <div className="footnote">{part}</div>}
+        <div className="caption secondary">{facts.join(' · ')}</div>
+        {item.timeline && item.remainingMinutes > 0 && <div className="caption secondary">{duration(item.remainingMinutes)} left on this list</div>}
+        <div className="up-actions">
+          {item.action === 'request' ? (
+            <Link className="btn btn-small btn-primary" to={`/titles/${t.id}?request=1${seasonParam}`}>
+              <Plus size={13} aria-hidden /> Request
+            </Link>
+          ) : item.action === 'watch' ? (
+            <Link className="btn btn-small" to={`/titles/${t.id}`}>
+              <Play size={12} fill="currentColor" aria-hidden /> Watch
+            </Link>
+          ) : (
+            <StagePill stage={e.stage} />
+          )}
+        </div>
+      </div>
+    </article>
   );
 }

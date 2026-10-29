@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 import { parseEntries, parseTraktListUrl, tokensFromResponse } from '../server/providers/trakt';
 import { parseLetterboxdCsv, parseLetterboxdRss, parseLetterboxdZip, UploadError } from '../server/providers/letterboxd';
-import { mapImdbTitleType, parseImdbCsv } from '../server/providers/imdb';
+import { ImdbClient, imdbGqlItem, mapImdbTitleType, parseImdbCsv, parseImdbListUrl } from '../server/providers/imdb';
+import { isTimeline } from '../server/services/lists';
 import { mediaBrowserHeader, normalizeItem, normalizeUserData } from '../server/providers/jellyfin';
 import { encodeSeerrQuery, seerrCan } from '../server/providers/seerr';
 import { HttpClient, normalizeServiceUrl, parseRetryAfter } from '../server/http/client';
@@ -21,6 +22,24 @@ describe('Trakt', () => {
     expect(skipped).toBe(3);
     expect(items[0]).toMatchObject({ sourceKey: 'movie:12', mediaType: 'movie', tmdbId: 11, imdbId: 'tt0076759', position: 1, sourceUrl: 'https://trakt.tv/movies/star-wars-1977' });
     expect(items[1]).toMatchObject({ mediaType: 'tv', tvdbId: 371980, tmdbId: 95396 });
+  });
+
+  it('keeps seasons and episodes as parts of their show, in list order', () => {
+    const show = { title: 'Dragons: Riders of Berk', year: 2012, ids: { trakt: 9, slug: 'riders', tmdb: 44305 }, runtime: 22 };
+    const { items, skipped } = parseEntries([
+      { id: 1, type: 'movie', movie: { title: 'How to Train Your Dragon', year: 2010, runtime: 98, ids: { trakt: 1, tmdb: 10191 } } },
+      { id: 2, type: 'season', season: { number: 1, episode_count: 20, ids: { trakt: 55 } }, show },
+      { id: 3, type: 'episode', episode: { season: 2, number: 5, title: 'Race to Fireworm Island', runtime: 23, ids: { trakt: 77 } }, show },
+      { id: 4, type: 'season', season: {}, show },
+    ]);
+    expect(skipped).toBe(1);
+    expect(items.map((i) => [i.position, i.sourceKey, i.mediaType, i.seasonNumber ?? null, i.episodeNumber ?? null, i.runtime])).toEqual([
+      [1, 'movie:1', 'movie', null, null, 98],
+      [2, 'season:55', 'tv', 1, null, 22],
+      [3, 'episode:77', 'tv', 2, 5, 23],
+    ]);
+    expect(items[1]).toMatchObject({ tmdbId: 44305, episodes: 20, sourceUrl: 'https://trakt.tv/shows/riders/seasons/1' });
+    expect(items[2]!.episodeTitle).toBe('Race to Fireworm Island');
   });
 
   it('parses list URLs from trakt.tv and app.trakt.tv only', () => {
@@ -121,9 +140,71 @@ describe('IMDb', () => {
     expect(r.items[1]!.rating).toBe(9);
   });
 
+  it('recognises public list links in any locale, and nothing else', () => {
+    expect(parseImdbListUrl('https://www.imdb.com/de/list/ls020816781/')).toBe('ls020816781');
+    expect(parseImdbListUrl('https://m.imdb.com/list/ls020816781/?ref_=ext_shr')).toBe('ls020816781');
+    expect(parseImdbListUrl('ls020816781')).toBe('ls020816781');
+    expect(parseImdbListUrl('https://www.imdb.com/user/ur1/watchlist')).toBeNull();
+    expect(parseImdbListUrl('https://imdb.com.evil.example/list/ls020816781/')).toBeNull();
+  });
+
+  it('maps GraphQL list entries: episodes become part of their series', () => {
+    const ep = imdbGqlItem(
+      {
+        createdDate: '2020-01-01T00:00:00Z',
+        description: null,
+        listItem: { id: 'tt1', titleText: { text: 'Pilot' }, titleType: { id: 'tvEpisode' }, runtime: { seconds: 3480 }, series: { series: { id: 'tt0903747', titleText: { text: 'Breaking Bad' }, releaseYear: { year: 2008 } }, episodeNumber: { seasonNumber: 1, episodeNumber: 1 } } },
+      },
+      7,
+    );
+    expect(ep).toMatchObject({ sourceKey: 'tt1', title: 'Breaking Bad', imdbId: 'tt0903747', mediaType: 'tv', seasonNumber: 1, episodeNumber: 1, episodeTitle: 'Pilot', runtime: 58, position: 7 });
+    expect(imdbGqlItem({ createdDate: null, description: null, listItem: { id: 'tt2', titleText: { text: 'A Game' }, titleType: { id: 'videoGame' } } }, 1)).toBeNull();
+  });
+
+  it('pages through a public list and reports private lists clearly', async () => {
+    const page = (after: string | null) => ({
+      data: {
+        list: {
+          id: 'ls1234567',
+          name: { originalText: 'Order' },
+          visibility: { id: 'PUBLIC' },
+          items: {
+            total: 2,
+            pageInfo: { hasNextPage: after === null, endCursor: 'next' },
+            edges: [{ node: { listItem: { id: after ? 'tt0000002' : 'tt0000001', titleText: { text: after ? 'B' : 'A' }, titleType: { id: 'movie' } } } }],
+          },
+        },
+      },
+    });
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const vars = JSON.parse(String(init!.body)).variables;
+      if (vars.id === 'ls7654321') return new Response(JSON.stringify({ errors: [{ extensions: { code: 'FORBIDDEN' } }], data: { list: null } }), { status: 200 });
+      return new Response(JSON.stringify(page(vars.after)), { status: 200 });
+    });
+    const r = await new ImdbClient(fetchImpl).list('ls1234567');
+    expect(r.items.map((i) => [i.title, i.position])).toEqual([
+      ['A', 1],
+      ['B', 2],
+    ]);
+    expect(r.info).toMatchObject({ externalId: 'list:ls1234567', kind: 'public', url: 'https://www.imdb.com/list/ls1234567/' });
+    expect((fetchImpl.mock.calls[0]![1]!.headers as Record<string, string>)['x-imdb-client-name']).toBe('jellywatcher');
+    await expect(new ImdbClient(fetchImpl).list('ls7654321')).rejects.toMatchObject({ kind: 'forbidden' });
+  });
+
   it('accepts minimal files with only a URL column', () => {
     const r = parseImdbCsv('URL\nhttps://www.imdb.com/title/tt0133093/\n', 'x');
     expect(r.items[0]!.imdbId).toBe('tt0133093');
+  });
+});
+
+describe('Lists', () => {
+  it('shows watch-order lists as timelines unless the person chose otherwise', () => {
+    expect(isTimeline({ display: 'auto', name: 'How to Train Your Dragon Timeline', description: null })).toBe(true);
+    expect(isTimeline({ display: 'auto', name: 'MCU in chronological order', description: null })).toBe(true);
+    expect(isTimeline({ display: 'auto', name: 'Star Wars', description: 'Machete watch order' })).toBe(true);
+    expect(isTimeline({ display: 'auto', name: 'Favourites', description: null })).toBe(false);
+    expect(isTimeline({ display: 'timeline', name: 'Favourites', description: null })).toBe(true);
+    expect(isTimeline({ display: 'grid', name: 'Dragon Timeline', description: null })).toBe(false);
   });
 });
 

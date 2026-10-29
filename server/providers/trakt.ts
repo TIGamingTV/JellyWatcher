@@ -13,6 +13,8 @@ export const TRAKT_API = 'https://api.trakt.tv';
 export const TRAKT_AUTH = 'https://auth.trakt.tv';
 const PAGE_LIMIT = 250;
 const MAX_PAGES = 100;
+/** Extended info adds runtimes, used for a list's total watch time. */
+const FULL = { extended: 'full' };
 
 const Ids = z.object({
   trakt: z.number().nullish(),
@@ -21,7 +23,9 @@ const Ids = z.object({
   tmdb: z.number().nullish(),
   tvdb: z.number().nullish(),
 });
-const Media = z.object({ title: z.string().nullish(), year: z.number().nullish(), ids: Ids });
+const Media = z.object({ title: z.string().nullish(), year: z.number().nullish(), ids: Ids, runtime: z.number().nullish(), aired_episodes: z.number().nullish() });
+const Season = z.object({ number: z.number().nullish(), ids: Ids.partial().nullish(), episode_count: z.number().nullish() });
+const Episode = z.object({ season: z.number().nullish(), number: z.number().nullish(), title: z.string().nullish(), ids: Ids.partial().nullish(), runtime: z.number().nullish() });
 const ListEntry = z.object({
   rank: z.number().nullish(),
   id: z.number().nullish(),
@@ -30,6 +34,8 @@ const ListEntry = z.object({
   type: z.string(),
   movie: Media.nullish(),
   show: Media.nullish(),
+  season: Season.nullish(),
+  episode: Episode.nullish(),
 });
 const TraktUser = z.object({ username: z.string().nullish(), name: z.string().nullish(), ids: z.object({ slug: z.string().nullish() }).nullish() });
 const TraktList = z.object({
@@ -95,38 +101,77 @@ export function parseTraktListUrl(input: string): TraktListRef | null {
   return null;
 }
 
+/**
+ * Parses list / watchlist entries. Movies and shows map to titles; seasons and episodes map to their
+ * show with the season (and episode) number, so watch-order lists keep every step. Entries without a
+ * rank keep the order the API returned them in.
+ */
 export function parseEntries(raw: unknown): { items: SourceItem[]; skipped: number } {
   if (!Array.isArray(raw)) throw new ProviderError('trakt', 'invalid_response');
   const items: SourceItem[] = [];
   let skipped = 0;
-  for (const row of raw) {
+  raw.forEach((row, index) => {
     const parsed = ListEntry.safeParse(row);
     if (!parsed.success) {
       skipped++;
-      continue;
+      return;
     }
     const e = parsed.data;
-    const media = e.type === 'movie' ? e.movie : e.type === 'show' ? e.show : null;
+    const media = e.type === 'movie' ? e.movie : ['show', 'season', 'episode'].includes(e.type) ? e.show : null;
     if (!media || !media.title) {
       skipped++;
-      continue;
+      return;
     }
-    const mediaType = e.type === 'movie' ? 'movie' : 'tv';
-    const slug = media.ids.slug;
-    items.push({
-      sourceKey: `${e.type}:${media.ids.trakt ?? slug ?? media.title}`,
+    const base = {
       title: media.title,
       year: media.year ?? null,
-      mediaType,
       tmdbId: media.ids.tmdb ?? null,
       imdbId: media.ids.imdb ?? null,
       tvdbId: media.ids.tvdb ?? null,
-      sourceUrl: slug ? `https://trakt.tv/${e.type === 'movie' ? 'movies' : 'shows'}/${slug}` : null,
-      position: e.rank ?? null,
+      position: e.rank ?? index + 1,
       listedAt: e.listed_at ?? null,
       notes: e.notes ?? null,
-    });
-  }
+    };
+    const slug = media.ids.slug;
+    const showKey = media.ids.trakt ?? slug ?? media.title;
+    if (e.type === 'movie') {
+      items.push({ ...base, sourceKey: `movie:${showKey}`, mediaType: 'movie', runtime: media.runtime ?? null, sourceUrl: slug ? `https://trakt.tv/movies/${slug}` : null });
+    } else if (e.type === 'show') {
+      items.push({ ...base, sourceKey: `show:${showKey}`, mediaType: 'tv', runtime: media.runtime ?? null, episodes: media.aired_episodes ?? null, sourceUrl: slug ? `https://trakt.tv/shows/${slug}` : null });
+    } else if (e.type === 'season') {
+      const n = e.season?.number;
+      if (n == null) {
+        skipped++;
+        return;
+      }
+      items.push({
+        ...base,
+        sourceKey: `season:${e.season?.ids?.trakt ?? `${showKey}:${n}`}`,
+        mediaType: 'tv',
+        seasonNumber: n,
+        episodes: e.season?.episode_count ?? null,
+        runtime: media.runtime ?? null,
+        sourceUrl: slug ? `https://trakt.tv/shows/${slug}/seasons/${n}` : null,
+      });
+    } else {
+      const s = e.episode?.season;
+      const n = e.episode?.number;
+      if (s == null || n == null) {
+        skipped++;
+        return;
+      }
+      items.push({
+        ...base,
+        sourceKey: `episode:${e.episode?.ids?.trakt ?? `${showKey}:${s}x${n}`}`,
+        mediaType: 'tv',
+        seasonNumber: s,
+        episodeNumber: n,
+        episodeTitle: e.episode?.title ?? null,
+        runtime: e.episode?.runtime ?? media.runtime ?? null,
+        sourceUrl: slug ? `https://trakt.tv/shows/${slug}/seasons/${s}/episodes/${n}` : null,
+      });
+    }
+  });
   return { items, skipped };
 }
 
@@ -228,7 +273,7 @@ export class TraktClient {
   async paginate(path: string, token?: string, query: Record<string, string> = {}): Promise<unknown[]> {
     const out: unknown[] = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const res = await this.api.get<unknown[]>(path, { ...query, page, limit: PAGE_LIMIT }, { headers: this.bearer(token) });
+      const res = await this.api.get<unknown[]>(path, { page, limit: PAGE_LIMIT, ...query }, { headers: this.bearer(token) });
       if (!Array.isArray(res.data)) throw new ProviderError('trakt', 'invalid_response');
       out.push(...res.data);
       const pageCount = Number(res.headers.get('x-pagination-page-count') ?? '1');
@@ -237,25 +282,16 @@ export class TraktClient {
     return out;
   }
 
+  // All types in one request so `rank` is one ordering across movies, shows, seasons and episodes.
   async watchlist(token: string): Promise<ListFetchResult> {
-    const movies = parseEntries(await this.paginate('/sync/watchlist/movies', token));
-    const shows = parseEntries(await this.paginate('/sync/watchlist/shows', token));
-    return {
-      info: { externalId: 'watchlist', name: 'Trakt Watchlist', kind: 'watchlist', url: 'https://trakt.tv/users/me/watchlist' },
-      items: [...movies.items, ...shows.items],
-      skipped: movies.skipped + shows.skipped,
-    };
+    const r = parseEntries(await this.paginate('/sync/watchlist', token, FULL));
+    return { info: { externalId: 'watchlist', name: 'Trakt Watchlist', kind: 'watchlist', url: 'https://trakt.tv/users/me/watchlist' }, ...r };
   }
 
   async publicUserWatchlist(user: string, token?: string): Promise<ListFetchResult> {
     const u = encodeURIComponent(user);
-    const movies = parseEntries(await this.paginate(`/users/${u}/watchlist/movies`, token));
-    const shows = parseEntries(await this.paginate(`/users/${u}/watchlist/shows`, token));
-    return {
-      info: { externalId: `watchlist:${user.toLowerCase()}`, name: `${user}’s Watchlist`, kind: 'public', ownerName: user, url: `https://trakt.tv/users/${u}/watchlist` },
-      items: [...movies.items, ...shows.items],
-      skipped: movies.skipped + shows.skipped,
-    };
+    const r = parseEntries(await this.paginate(`/users/${u}/watchlist`, token, FULL));
+    return { info: { externalId: `watchlist:${user.toLowerCase()}`, name: `${user}’s Watchlist`, kind: 'public', ownerName: user, url: `https://trakt.tv/users/${u}/watchlist` }, ...r };
   }
 
   async myLists(token: string): Promise<SourceListInfo[]> {
@@ -284,7 +320,7 @@ export class TraktClient {
     // The /lists/{id} route only serves public lists; for the user's own (possibly private) lists
     // use the /users/{slug}/lists/{id} route with the user's token.
     const path = ownerSlug && token ? `/users/${encodeURIComponent(ownerSlug)}/lists/${traktListId}/items` : `/lists/${traktListId}/items`;
-    return parseEntries(await this.paginate(path, token));
+    return parseEntries(await this.paginate(path, token, FULL));
   }
 
   async searchLists(query: string): Promise<SourceListInfo[]> {

@@ -60,6 +60,16 @@ interface ReqRow {
   updated_at: string;
 }
 
+interface HistoryRow {
+  title_id: number;
+  state: 'watched' | 'in_progress';
+  percent: number | null;
+  played_episodes: number | null;
+  total_episodes: number | null;
+  last_played_at: string | null;
+  updated_at: string;
+}
+
 interface SeerrRow {
   title_id: number;
   status: number | null;
@@ -98,6 +108,8 @@ export class StatusService {
     const jfRows = new Map<number, JfRow[]>();
     const reqRows = new Map<number, ReqRow[]>();
     const seerrRows = new Map<number, SeerrRow>();
+    const history = new Map<number, HistoryRow>();
+    const watchedEpisodes = new Map<number, number>();
     for (const ids of chunk(titleIds, 500)) {
       const ph = ids.map(() => '?').join(',');
       const jfAll = this.db
@@ -121,11 +133,26 @@ export class StatusService {
         .prepare(`SELECT t.id AS title_id, sm.status, sm.synced_at FROM titles t JOIN seerr_media sm ON sm.media_type = t.media_type AND sm.tmdb_id = t.tmdb_id WHERE t.id IN (${ph})`)
         .all(...ids) as SeerrRow[];
       for (const r of smAll) seerrRows.set(r.title_id, r);
+
+      const hAll = this.db.prepare(`SELECT * FROM watch_history WHERE user_id = ? AND title_id IN (${ph})`).all(user.id, ...ids) as HistoryRow[];
+      for (const r of hAll) history.set(r.title_id, r);
+      const weAll = this.db
+        .prepare(`SELECT title_id, COUNT(*) AS n FROM watched_episodes WHERE user_id = ? AND season > 0 AND title_id IN (${ph}) GROUP BY title_id`)
+        .all(user.id, ...ids) as { title_id: number; n: number }[];
+      for (const r of weAll) watchedEpisodes.set(r.title_id, r.n);
     }
     const types = new Map<number, 'movie' | 'tv'>();
+    const episodeTotals = new Map<number, number | null>();
     for (const ids of chunk(titleIds, 500)) {
-      const rows = this.db.prepare(`SELECT id, media_type FROM titles WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as { id: number; media_type: 'movie' | 'tv' }[];
-      for (const r of rows) types.set(r.id, r.media_type);
+      const rows = this.db.prepare(`SELECT id, media_type, episode_count FROM titles WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as {
+        id: number;
+        media_type: 'movie' | 'tv';
+        episode_count: number | null;
+      }[];
+      for (const r of rows) {
+        types.set(r.id, r.media_type);
+        episodeTotals.set(r.id, r.episode_count);
+      }
     }
 
     for (const id of titleIds) {
@@ -175,16 +202,13 @@ export class StatusService {
         request = { state: mapSeerrMediaOnly(seerr?.status), syncedAt: sr.lastOk, stale: sr.stale, source: 'Seerr', requestId: null, requestedBy: null, mine: false };
       }
 
-      // Viewing: Jellyfin user data for the linked account only.
+      // Viewing: Jellyfin user data for the linked account while the title is in the library; after
+      // that, the remembered history (titles deleted after watching stay watched).
       let viewing: TitleStatus['viewing'];
       const best = [...jfItems].sort((a, b) => (b.played ?? 0) - (a.played ?? 0) || (b.played_percentage ?? 0) - (a.played_percentage ?? 0))[0];
-      if (!user.jellyfinUserId) {
-        viewing = { state: 'unavailable', syncedAt: null, stale: false, source: null, detail: 'Link your Jellyfin account to see viewing progress.', progress: null };
-      } else if (!best) {
-        viewing = { state: 'unavailable', syncedAt: null, stale: false, source: null, detail: 'Not in the Jellyfin library.', progress: null };
-      } else if (!best.synced_at) {
-        viewing = { state: 'unavailable', syncedAt: null, stale: true, source: 'Jellyfin', detail: 'Viewing progress has not been synced yet.', progress: null };
-      } else {
+      const hist = history.get(id);
+      const epWatched = watchedEpisodes.get(id) ?? 0;
+      if (user.jellyfinUserId && best?.synced_at) {
         const state = mapViewing(mediaType, {
           played: best.played === 1,
           playedPercentage: best.played_percentage,
@@ -205,6 +229,30 @@ export class StatusService {
             lastPlayedAt: best.last_played_at,
           },
         };
+      } else if (hist) {
+        viewing = {
+          state: hist.state,
+          syncedAt: hist.updated_at,
+          stale: false,
+          source: 'Jellyfin',
+          detail: hist.state === 'watched' ? 'Watched. No longer in the library.' : 'Progress from before it left the library.',
+          progress: { percent: hist.percent, playedEpisodes: hist.played_episodes, totalEpisodes: hist.total_episodes, lastPlayedAt: hist.last_played_at },
+        };
+      } else if (epWatched > 0) {
+        viewing = { state: 'in_progress', syncedAt: null, stale: false, source: 'Jellyfin', detail: 'Progress from before it left the library.', progress: { percent: null, playedEpisodes: null, totalEpisodes: null, lastPlayedAt: null } };
+      } else if (!user.jellyfinUserId) {
+        viewing = { state: 'unavailable', syncedAt: null, stale: false, source: null, detail: 'Link your Jellyfin account to see viewing progress.', progress: null };
+      } else if (!best) {
+        viewing = { state: 'unavailable', syncedAt: null, stale: false, source: null, detail: 'Not in the Jellyfin library.', progress: null };
+      } else {
+        viewing = { state: 'unavailable', syncedAt: null, stale: true, source: 'Jellyfin', detail: 'Viewing progress has not been synced yet.', progress: null };
+      }
+      // Shows: episodes watched before some seasons were deleted still count.
+      if (mediaType === 'tv' && epWatched > 0 && viewing.state !== 'watched' && viewing.progress) {
+        const played = Math.max(viewing.progress.playedEpisodes ?? 0, epWatched);
+        const total = Math.max(episodeTotals.get(id) ?? 0, viewing.progress.totalEpisodes ?? 0) || null;
+        viewing.state = total !== null && played >= total ? 'watched' : 'in_progress';
+        viewing.progress = { ...viewing.progress, playedEpisodes: played, totalEpisodes: total, percent: total ? Math.round((Math.min(played, total) / total) * 100) : viewing.progress.percent };
       }
 
       out.set(id, {

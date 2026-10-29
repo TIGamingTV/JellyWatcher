@@ -6,45 +6,14 @@ import { parseJson } from '../db/index.js';
 import { ApiError } from '../http/errors.js';
 import { IdParam, parse } from '../http/validate.js';
 import { requireUser, type SessionUser } from '../security/auth.js';
+import { card, cardsFor, JF_JOIN, posterUrl, userCtx } from '../services/cards.js';
+import { isTimeline } from '../services/lists.js';
 import { checkEligibility, submitRequest, syncTitleFromSeerr } from '../services/requests.js';
-import type { TitleStatus } from '../services/status.js';
+import { buildTimelines } from '../services/timeline.js';
 import type { TitleRow } from '../services/titles.js';
 import { ensureTitleMetadata } from '../sync/metadata.js';
 import { triggerJob } from '../sync/scheduler.js';
-import type { MatchCandidate } from '../domain/matching.js';
 import { ACTIVE_REQUEST_STATES, mapSeerrRequest, type LifecycleStage } from '../../shared/status.js';
-
-const POSTER_SIZE = 'w342';
-
-export function posterUrl(t: { poster_path: string | null }, jf?: { id: string; image_tag: string | null } | null): string | null {
-  if (t.poster_path && /^\/[A-Za-z0-9_-]+\.(jpg|jpeg|png|webp)$/i.test(t.poster_path)) return `/api/images/tmdb/${POSTER_SIZE}${t.poster_path}`;
-  if (jf?.image_tag) return `/api/images/jellyfin/${jf.id}?tag=${encodeURIComponent(jf.image_tag)}`;
-  return null;
-}
-
-function userCtx(u: SessionUser) {
-  return { id: u.id, jellyfinUserId: u.jellyfinUserId, seerrUserId: u.seerrUserId };
-}
-
-function card(t: TitleRow & { jf_id?: string | null; jf_tag?: string | null }, s: TitleStatus | undefined) {
-  return {
-    id: t.id,
-    mediaType: t.media_type,
-    tmdbId: t.tmdb_id,
-    title: t.title,
-    year: t.year,
-    posterUrl: posterUrl(t, t.jf_id ? { id: t.jf_id, image_tag: t.jf_tag ?? null } : null),
-    genres: parseJson<string[]>(t.genres, []),
-    stage: s?.stage ?? 'unknown',
-    availability: s?.availability.state ?? 'unknown',
-    request: s?.request.state ?? 'unknown',
-    viewing: s?.viewing.state ?? 'unavailable',
-    progress: s?.viewing.progress?.percent ?? null,
-    stale: Boolean(s && (s.availability.stale || s.request.stale)),
-  };
-}
-
-const JF_JOIN = `LEFT JOIN (SELECT title_id, MIN(id) AS jf_id, MAX(image_tag) AS jf_tag FROM jellyfin_items GROUP BY title_id) jf ON jf.title_id = t.id`;
 
 const CatalogQuery = z.object({
   listId: z.coerce.number().int().positive().optional(),
@@ -145,21 +114,48 @@ export function catalog(ctx: AppContext, u: SessionUser, q: z.infer<typeof Catal
   };
 }
 
-function ensureCandidateTitles(ctx: AppContext, results: MatchCandidate[]): number[] {
-  return results.map((r) =>
-    ctx.titles.ensure({ mediaType: r.mediaType, tmdbId: r.tmdbId, title: r.title, year: r.year, posterPath: r.posterPath, overview: r.overview, source: 'search' }),
-  );
-}
+const WATCH_STAGES = new Set<LifecycleStage>(['in_library', 'in_progress', 'watched']);
+const WAITING_STAGES = new Set<LifecycleStage>(['processing', 'pending_approval', 'requested', 'reported_available', 'partially_available']);
 
-function cardsFor(ctx: AppContext, u: SessionUser, ids: number[]) {
-  if (ids.length === 0) return [];
-  const statuses = ctx.status.forTitles(userCtx(u), ids);
-  const rows = ctx.db.prepare(`SELECT t.*, jf.jf_id, jf.jf_tag FROM titles t ${JF_JOIN} WHERE t.id IN (${ids.map(() => '?').join(',')})`).all(...ids) as (TitleRow & {
-    jf_id: string | null;
-    jf_tag: string | null;
-  })[];
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  return ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => Boolean(r)).map((r) => card(r, statuses.get(r.id)));
+/**
+ * The next unwatched entry of every list, in list order: what to watch or request next. Lists with
+ * progress come first, then timelines, then everything else. Diaries (already watched) are skipped.
+ */
+export function upNextFor(ctx: AppContext, u: SessionUser, limit = 16) {
+  const lists = ctx.lists.forUser(u.id).filter((l) => l.kind !== 'diary');
+  const timelines = buildTimelines(ctx, u, lists);
+  const picks = lists
+    .map((l, order) => ({ l, order, t: timelines.get(l.id)! }))
+    .filter((x) => x.t.nextIndex !== null)
+    .map((x) => ({ ...x, timeline: isTimeline(x.l), started: x.t.summary.watchedEntries > 0 }))
+    .sort((a, b) => Number(b.started) - Number(a.started) || Number(b.timeline) - Number(a.timeline) || a.order - b.order);
+  const seen = new Map<string, { lists: { id: number; name: string; provider: string }[] }>();
+  const out = [];
+  for (const p of picks) {
+    const e = p.t.entries[p.t.nextIndex!]!;
+    const key = `${e.title?.id}:${e.season ?? ''}:${e.episode ?? ''}`;
+    const ref = { id: p.l.id, name: p.l.name, provider: p.l.provider };
+    const dup = seen.get(key);
+    if (dup) {
+      dup.lists.push(ref);
+      continue;
+    }
+    if (out.length >= limit) continue;
+    const action = WATCH_STAGES.has(e.stage) ? 'watch' : WAITING_STAGES.has(e.stage) ? 'waiting' : 'request';
+    const item = {
+      list: ref,
+      lists: [ref],
+      timeline: p.timeline,
+      position: e.position,
+      of: p.t.entries.length,
+      remainingMinutes: p.t.summary.remainingMinutes,
+      action,
+      entry: e,
+    };
+    seen.set(key, item);
+    out.push(item);
+  }
+  return out;
 }
 
 export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
@@ -171,20 +167,6 @@ export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
   });
 
   // ---- Title detail ------------------------------------------------------------------------
-  app.get('/titles/lookup/:type/:tmdbId', async (req) => {
-    requireUser(req);
-    const p = parse(z.object({ type: z.enum(['movie', 'tv']), tmdbId: z.coerce.number().int().positive() }), req.params);
-    let id = ctx.titles.byTmdb(p.type, p.tmdbId)?.id;
-    if (!id) {
-      const meta = ctx.metadata();
-      const m = meta ? await meta.details(p.type, p.tmdbId) : null;
-      if (!m) throw new ApiError(404, 'not_found', 'That title was not found.');
-      id = ctx.titles.ensure({ mediaType: p.type, tmdbId: p.tmdbId, title: m.title, year: m.year, source: meta!.name });
-      id = ctx.titles.applyMetadata(id, m, meta!.name);
-    }
-    return { id };
-  });
-
   app.get('/titles/:id', async (req) => {
     const u = requireUser(req);
     const { id: rawId } = parse(IdParam, req.params);
@@ -396,42 +378,7 @@ export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
       .prepare("SELECT COUNT(*) AS n FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.user_id = ? AND li.match_status IN ('review', 'unmatched')")
       .get(u.id) as { n: number }).n;
 
-    // Continue watching comes live from Jellyfin; fall back to the synced state.
-    let continueWatching: unknown[] = [];
-    let continueSource: 'live' | 'synced' | 'unavailable' = 'unavailable';
-    const jf = ctx.integrations.jellyfin();
-    if (jf && u.jellyfinUserId) {
-      try {
-        const items = await jf.resume(u.jellyfinUserId, 16);
-        const seen = new Set<string>();
-        for (const it of items) {
-          const seriesId = it.SeriesId ?? null;
-          const key = seriesId ?? it.Id;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const local = ctx.db.prepare('SELECT title_id FROM jellyfin_items WHERE id = ?').get(key) as { title_id: number | null } | undefined;
-          const pct = it.UserData?.PlayedPercentage ?? null;
-          continueWatching.push({
-            titleId: local?.title_id ?? null,
-            jellyfinItemId: it.Id,
-            name: it.SeriesName ?? it.Name ?? '',
-            episode: seriesId ? `S${it.ParentIndexNumber ?? '?'} · E${it.IndexNumber ?? '?'} — ${it.Name ?? ''}` : null,
-            percent: pct !== null ? Math.round(pct) : null,
-            imageUrl: `/api/images/jellyfin/${seriesId ?? it.Id}`,
-          });
-        }
-        continueSource = 'live';
-      } catch {
-        const rows = ctx.db
-          .prepare(
-            `SELECT ji.title_id AS id FROM jellyfin_user_data ud JOIN jellyfin_items ji ON ji.id = ud.item_id
-              WHERE ud.jellyfin_user_id = ? AND ud.played = 0 AND COALESCE(ud.position_ticks, 0) > 0 ORDER BY ud.last_played_at DESC LIMIT 12`,
-          )
-          .all(u.jellyfinUserId) as { id: number }[];
-        continueWatching = cardsFor(ctx, u, rows.map((r) => r.id)).map((c) => ({ titleId: c.id, name: c.title, percent: c.progress, imageUrl: c.posterUrl, episode: null }));
-        continueSource = 'synced';
-      }
-    }
+    const upNext = upNextFor(ctx, u);
 
     const attention: { kind: string; message: string; href: string }[] = [];
     if (reviewCount > 0) attention.push({ kind: 'review', message: `${reviewCount} imported ${reviewCount === 1 ? 'title needs' : 'titles need'} a match review.`, href: '/watchlists/review' });
@@ -453,28 +400,9 @@ export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
       counts: { watchlist: watchlistCount, review: reviewCount, lists: ctx.lists.forUser(u.id).length },
       recentlyAvailable: cardsFor(ctx, u, recentlyAvailable.map((r) => r.id)),
       activeRequests: cardsFor(ctx, u, activeReqs.map((r) => r.id)),
-      continueWatching,
-      continueSource,
+      upNext,
       activity: ctx.activity.recent(u.id, 20),
       attention,
     };
-  });
-
-  // ---- Discover ----------------------------------------------------------------------------
-  app.get('/discover/trending', async (req) => {
-    const u = requireUser(req);
-    const meta = ctx.metadata();
-    if (!meta) return { source: null, items: [] };
-    const results = await meta.trending();
-    return { source: meta.name, items: cardsFor(ctx, u, ensureCandidateTitles(ctx, results)) };
-  });
-
-  app.get('/discover/search', async (req) => {
-    const u = requireUser(req);
-    const q = parse(z.object({ q: z.string().trim().min(1).max(100), page: z.coerce.number().int().min(1).max(50).default(1) }), req.query);
-    const meta = ctx.metadata();
-    if (!meta) throw new ApiError(400, 'no_metadata', 'Search needs TMDb or Seerr. An administrator can connect one in Integrations.');
-    const r = await meta.searchAny(q.q, q.page);
-    return { source: meta.name, totalPages: r.totalPages, items: cardsFor(ctx, u, ensureCandidateTitles(ctx, r.results)) };
   });
 }

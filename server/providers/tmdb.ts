@@ -55,6 +55,19 @@ export interface TitleMetadata {
   imdbId: string | null;
   tvdbId: number | null;
   seasons?: { seasonNumber: number; name: string | null; episodeCount: number | null; airDate: string | null }[];
+  /** Regular-season totals (specials excluded); shows only. */
+  episodeCount?: number | null;
+  seasonCount?: number | null;
+}
+
+/** Regular-season episode and season totals, preferring the per-season breakdown. */
+export function showTotals(seasons: TitleMetadata['seasons'], numberOfEpisodes?: number | null, numberOfSeasons?: number | null) {
+  const regular = (seasons ?? []).filter((s) => s.seasonNumber > 0);
+  const summed = regular.reduce((n, s) => n + (s.episodeCount ?? 0), 0);
+  return {
+    episodeCount: summed > 0 ? summed : (numberOfEpisodes ?? null),
+    seasonCount: regular.length > 0 ? regular.length : (numberOfSeasons ?? null),
+  };
 }
 
 const Details = z.object({
@@ -71,6 +84,9 @@ const Details = z.object({
   genres: z.array(z.object({ name: z.string() })).nullish(),
   runtime: z.number().nullish(),
   episode_run_time: z.array(z.number()).nullish(),
+  number_of_episodes: z.number().nullish(),
+  number_of_seasons: z.number().nullish(),
+  last_episode_to_air: z.object({ runtime: z.number().nullish() }).nullish(),
   imdb_id: z.string().nullish(),
   external_ids: z.object({ imdb_id: z.string().nullish(), tvdb_id: z.number().nullish() }).nullish(),
   seasons: z
@@ -119,14 +135,6 @@ export class TmdbClient {
     };
   }
 
-  async trending(mediaType: 'all' | MediaType = 'all', window: 'day' | 'week' = 'week'): Promise<MatchCandidate[]> {
-    const res = await this.http.get(`/trending/${mediaType}/${window}`);
-    const data = z.object({ results: z.array(Result) }).parse(res.data);
-    return data.results
-      .filter((r) => mediaType !== 'all' || r.media_type === 'movie' || r.media_type === 'tv')
-      .map((r) => toCandidate(r, (mediaType === 'all' ? r.media_type : mediaType) as MediaType));
-  }
-
   async details(mediaType: MediaType, tmdbId: number): Promise<TitleMetadata | null> {
     try {
       const res = await this.http.get(`/${mediaType}/${tmdbId}`, { append_to_response: 'external_ids' });
@@ -134,6 +142,7 @@ export class TmdbClient {
       if (!p.success) throw new ProviderError('tmdb', 'invalid_response');
       const d = p.data;
       const release = d.release_date ?? d.first_air_date ?? null;
+      const seasons = d.seasons?.map((s) => ({ seasonNumber: s.season_number, name: s.name ?? null, episodeCount: s.episode_count ?? null, airDate: s.air_date ?? null }));
       return {
         tmdbId: d.id,
         mediaType,
@@ -145,10 +154,11 @@ export class TmdbClient {
         posterPath: d.poster_path ?? null,
         backdropPath: d.backdrop_path ?? null,
         genres: (d.genres ?? []).map((g) => g.name),
-        runtime: d.runtime ?? d.episode_run_time?.[0] ?? null,
+        runtime: d.runtime || d.episode_run_time?.[0] || d.last_episode_to_air?.runtime || null,
         imdbId: d.imdb_id ?? d.external_ids?.imdb_id ?? null,
         tvdbId: d.external_ids?.tvdb_id ?? null,
-        seasons: d.seasons?.map((s) => ({ seasonNumber: s.season_number, name: s.name ?? null, episodeCount: s.episode_count ?? null, airDate: s.air_date ?? null })),
+        seasons,
+        ...(mediaType === 'tv' ? showTotals(seasons, d.number_of_episodes, d.number_of_seasons) : {}),
       };
     } catch (err) {
       if (err instanceof ProviderError && err.kind === 'not_found') return null;

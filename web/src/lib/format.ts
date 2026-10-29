@@ -34,6 +34,27 @@ export function runtime(minutes: number | null | undefined): string | null {
   return h ? `${h} hr ${m ? `${m} min` : ''}`.trim() : `${m} min`;
 }
 
+/** Long durations for watch-time totals: "52 h 10 min", "3 d 4 h" past 72 hours. */
+export function duration(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h >= 72) {
+    const d = Math.floor(h / 24);
+    const rh = h % 24;
+    return rh ? `${d} d ${rh} h` : `${d} d`;
+  }
+  const rm = m % 60;
+  return rm ? `${h} h ${rm} min` : `${h} h`;
+}
+
+/** "S01E03", "Season 2" for season/episode entries. */
+export function episodeCode(season: number | null, episode: number | null): string | null {
+  if (season === null) return null;
+  if (episode === null) return season === 0 ? 'Specials' : `Season ${season}`;
+  return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+}
+
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
 }

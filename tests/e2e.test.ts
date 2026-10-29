@@ -13,7 +13,7 @@ import { syncJellyfin } from '../server/sync/jellyfin';
 import { syncSeerr } from '../server/sync/seerr';
 import { triggerJob } from '../server/sync/scheduler';
 import { syncMetadata } from '../server/sync/metadata';
-import { ALICE_JF, JF, SEERR, createMocks } from './helpers/mocks';
+import { ALICE_JF, HEAT_JF, IMDB_LIST, JF, SEERR, SEV_JF, createMocks } from './helpers/mocks';
 
 const SETUP_CODE = 'ABCDE-12345';
 
@@ -261,6 +261,72 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     expect(r.status).toBe(200);
     const call = mocks.state.seerrCalls.filter((c) => c.method === 'POST' && c.path === '/request').pop();
     expect(call?.body).toMatchObject({ mediaType: 'tv', mediaId: 95396, seasons: [2], tvdbId: 371980 });
+  });
+
+  let imdbListId: number;
+  it('adds a public IMDb list by link, keeping its order and its episodes', async () => {
+    expect((await admin.post('/api/lists/link', { url: 'https://example.com/list/ls020816781/' })).status).toBe(400);
+    expect((await admin.post('/api/lists/link', { url: 'https://www.imdb.com/list/ls000000001/' })).status).toBe(404); // private
+    const r = await admin.post('/api/lists/link', { url: 'https://www.imdb.com/de/list/ls020816781/?ref_=x' });
+    expect(r.status).toBe(200);
+    expect(r.data.list).toMatchObject({ provider: 'imdb', kind: 'public', name: 'Mann Timeline', canSync: true, itemCount: 4, timeline: true });
+    imdbListId = r.data.list.id;
+    expect(mocks.state.imdbCalls.filter((c) => c.id === IMDB_LIST).map((c) => c.after)).toEqual([null, 'c2']);
+
+    while (ctx.matcher.pendingCount() > 0 || ctx.jobs.isRunning('match')) await triggerJob(ctx, 'match', 'manual');
+    await syncMetadata(ctx);
+    await syncJellyfin(ctx); // reads Severance's episodes now that it is on a list
+
+    const tl = await admin.get(`/api/lists/${imdbListId}/timeline`);
+    expect(tl.status).toBe(200);
+    expect(tl.data.entries.map((e: any) => [e.position, e.kind, e.title?.title, e.season, e.episode])).toEqual([
+      [1, 'movie', 'Heat', null, null],
+      [2, 'episode', 'Severance', 1, 1],
+      [3, 'movie', 'Thief', null, null],
+      [4, 'show', 'Severance', null, null],
+    ]);
+    expect(tl.data.entries.map((e: any) => e.state)).toEqual(['watched', 'watched', 'unwatched', 'in_progress']);
+    expect(tl.data.entries[3]).toMatchObject({ episodes: 19, seasons: 2, watchedEpisodes: 9, runtime: 950 });
+    expect(tl.data.nextIndex).toBe(2);
+    // 170 (Heat) + 57 (episode) + 123 (Thief) + 19 × 50 (Severance)
+    expect(tl.data.summary).toMatchObject({ entries: 4, films: 2, shows: 1, seasons: 2, episodes: 20, totalMinutes: 1300, watchedMinutes: 677, remainingMinutes: 623 });
+
+    // Re-sync through the normal path is idempotent and keeps the order.
+    const again = await admin.post(`/api/lists/${imdbListId}/sync`);
+    expect(again.data.result).toMatchObject({ added: 0, removed: 0, total: 4 });
+  });
+
+  it('shows the next entry of each list on Home, deduplicated across lists', async () => {
+    const home = await admin.get('/api/home');
+    expect(home.data.continueWatching).toBeUndefined();
+    const first = home.data.upNext[0];
+    expect(first).toMatchObject({ timeline: true, position: 3, of: 4, action: 'request' });
+    expect(first.list.id).toBe(imdbListId);
+    expect(first.entry.title.title).toBe('Thief');
+    expect(first.lists.map((l: any) => l.provider).sort()).toEqual(['imdb', 'trakt']); // also next on the Trakt list
+    const titles = home.data.upNext.map((u: any) => u.entry.title.title);
+    expect(new Set(titles).size).toBe(titles.length);
+  });
+
+  it('keeps titles watched after they are deleted from the library', async () => {
+    mocks.state.jellyfinRemoved = new Set([HEAT_JF, SEV_JF]);
+    mocks.state.seerrMedia.delete('movie:949');
+    await syncJellyfin(ctx);
+    await syncSeerr(ctx);
+    const heat = (await admin.get('/api/catalog?q=heat')).data.items[0];
+    expect(heat).toMatchObject({ availability: 'not_in_library', viewing: 'watched', stage: 'watched' });
+    const sev = (await admin.get('/api/catalog?q=severance')).data.items[0];
+    expect(sev).toMatchObject({ availability: 'not_in_library', viewing: 'in_progress' });
+    const detail = await admin.get(`/api/titles/${heat.id}`);
+    expect(detail.data.status.viewing.detail).toMatch(/No longer in the library/);
+    const tl = await admin.get(`/api/lists/${imdbListId}/timeline`);
+    expect(tl.data.entries.map((e: any) => e.state)).toEqual(['watched', 'watched', 'unwatched', 'in_progress']);
+    expect(tl.data.entries[3].watchedEpisodes).toBe(9);
+
+    mocks.state.jellyfinRemoved = new Set();
+    mocks.state.seerrMedia.set('movie:949', { id: 1, tmdbId: 949, mediaType: 'movie', status: 5 });
+    await syncJellyfin(ctx);
+    await syncSeerr(ctx);
   });
 
   it('isolates users: members cannot see other people’s lists or administer integrations', async () => {

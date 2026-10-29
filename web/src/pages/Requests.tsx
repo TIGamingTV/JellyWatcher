@@ -121,7 +121,7 @@ export function RequestsPage() {
       ) : q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : q.data!.items.length === 0 ? (
-        <EmptyState icon={<Inbox size={26} />} title={filter === 'active' ? 'No Requests in Progress' : 'No Requests'} actions={<Link className="btn" to="/watchlists?availability=not_in_library&request=not_requested">Find Something to Request</Link>}>
+        <EmptyState icon={<Inbox size={26} />} title={filter === 'active' ? 'No Requests in Progress' : 'No Requests'} actions={<Link className="btn" to="/">See What’s Up Next</Link>}>
           Requests you make here or directly in Seerr appear in this list.
         </EmptyState>
       ) : (

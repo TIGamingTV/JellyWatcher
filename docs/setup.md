@@ -4,7 +4,7 @@
 
 Requirements: Docker with Compose v2.24 or newer (`env_file.required`), and about 150 MB of disk space
 plus the image cache. Images are published to `ghcr.io/tigamingtv/jellywatcher` for `linux/amd64` and
-`linux/arm64`. Tags: `latest`, an exact version (`0.1.0`) and a minor line (`0.1`).
+`linux/arm64`. Tags: `latest`, an exact version (`0.2.0`) and a minor line (`0.2`).
 
 ```bash
 mkdir jellywatcher && cd jellywatcher
@@ -86,6 +86,9 @@ account that signs in with Jellyfin.
 
 Watchlists › Lists › **Add List**:
 
+- **Any list link:** paste a public IMDb list (`imdb.com/list/ls…`, any language prefix) or a Trakt
+  list or watchlist link. No sign-in is needed; the list keeps its order and syncs automatically.
+  Trakt links need the Trakt app from Integrations › Trakt (Client ID only).
 - **Trakt:**
   1. Connect your account in Integrations › Trakt by entering a code at trakt.tv/activate.
   2. Add your Watchlist, your own lists and the lists you liked.
@@ -93,7 +96,13 @@ Watchlists › Lists › **Add List**:
 - **Letterboxd:**
   - Upload the export ZIP (letterboxd.com › Settings › Data › Export Your Data) or a single list CSV.
   - Optionally add your username for the RSS diary.
-- **IMDb:** upload the CSV from the Export icon on your Watchlist or a list.
+- **IMDb:** paste a public list link, or upload the CSV from the Export icon on your Watchlist or a
+  private list (uploaded files skip episodes; links include them).
+
+Lists whose name suggests a watch order ("timeline", "chronological", "watch order", …) open as a
+**timeline**: every entry in list order, including single seasons and episodes, with film, show,
+season and episode counts and the watch time left. Switch any list between Timeline and Grid on its
+page. Home shows **Up Next**, the next unwatched entry of every list, with a Request button.
 
 Entries without IDs are matched in the background. Anything uncertain appears under
 **Watchlists › Needs Review**.

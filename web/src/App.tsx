@@ -1,16 +1,15 @@
 import { lazy, Suspense } from 'react';
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Compass, House, Inbox, Library, ListVideo, LogOut, Plug, Settings as SettingsIcon, Play } from 'lucide-react';
+import { House, Inbox, Library, ListVideo, LogOut, Plug, Settings as SettingsIcon, Play } from 'lucide-react';
 import { get, post } from './lib/api';
 import { useAppearance, useMe, useUser } from './lib/session';
 import { CenterLoading } from './components/ui';
 import { LoginPage, SetupPage } from './pages/Auth';
 import { HomePage } from './pages/Home';
 import { WatchlistsPage } from './pages/Watchlists';
-import { TitlePage, TitleLookup } from './pages/Title';
+import { TitlePage } from './pages/Title';
 
-const DiscoverPage = lazy(() => import('./pages/Discover').then((m) => ({ default: m.DiscoverPage })));
 const RequestsPage = lazy(() => import('./pages/Requests').then((m) => ({ default: m.RequestsPage })));
 const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default: m.LibraryPage })));
 const IntegrationsPage = lazy(() => import('./pages/Integrations').then((m) => ({ default: m.IntegrationsPage })));
@@ -41,8 +40,6 @@ export function App() {
       <Route element={<Shell />}>
         <Route index element={<HomePage />} />
         <Route path="watchlists/*" element={<WatchlistsPage />} />
-        <Route path="discover" element={<DiscoverPage />} />
-        <Route path="discover/:type/:tmdbId" element={<TitleLookup />} />
         <Route path="titles/:id" element={<TitlePage />} />
         <Route path="requests" element={<RequestsPage />} />
         <Route path="library" element={<LibraryPage />} />
@@ -58,7 +55,6 @@ export function App() {
 const PRIMARY_NAV = [
   { to: '/', label: 'Home', icon: House, end: true },
   { to: '/watchlists', label: 'Watchlists', icon: ListVideo },
-  { to: '/discover', label: 'Discover', icon: Compass },
   { to: '/requests', label: 'Requests', icon: Inbox },
   { to: '/library', label: 'Library', icon: Library },
 ];

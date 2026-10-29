@@ -67,6 +67,9 @@ const Details = z.object({
   genres: z.array(Genre).nullish(),
   runtime: z.number().nullish(),
   episodeRunTime: z.array(z.number()).nullish(),
+  numberOfEpisodes: z.number().nullish(),
+  numberOfSeasons: z.number().nullish(),
+  lastEpisodeToAir: z.object({ runtime: z.number().nullish() }).nullish(),
   imdbId: z.string().nullish(),
   externalIds: z.object({ imdbId: z.string().nullish(), tvdbId: z.number().nullish() }).nullish(),
   seasons: z

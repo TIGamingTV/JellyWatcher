@@ -30,30 +30,36 @@ response validation (zod, tolerant of missing fields) and quirks:
 
 | Adapter | Responsibility |
 | --- | --- |
-| `trakt.ts` | Device-code OAuth on `auth.trakt.tv`, paginated list and watchlist reads, list search and discovery, list URL parsing. |
+| `trakt.ts` | Device-code OAuth on `auth.trakt.tv`, paginated list and watchlist reads (movies, shows, seasons, episodes in rank order), list search and discovery, list URL parsing. |
 | `letterboxd.ts` | Parsing the export ZIP and list CSVs, and RSS diary parsing. No scraping. |
-| `imdb.ts` | Parsing IMDb CSV exports with column aliases. |
+| `imdb.ts` | Public list reads through IMDb's GraphQL endpoint (list order, episodes), list URL parsing, CSV exports with column aliases. |
 | `seerr.ts` | Status, users, search, details, request creation with `X-API-User`, request and media listing. |
-| `jellyfin.ts` | `MediaBrowser` auth header, credential verification, paginated library and user data, resume, images. |
-| `tmdb.ts` | Find by external id, search, details, trending. |
+| `jellyfin.ts` | `MediaBrowser` auth header, credential verification, paginated library and user data, series episodes, images. |
+| `tmdb.ts` | Find by external id, search, details (runtime, season and episode counts). |
 
 `services/metadata.ts` abstracts *metadata*. It uses TMDb when a token is configured, and otherwise
 Seerr's TMDb proxy, so a TMDb key is optional.
 
+`services/timeline.ts` turns a list into ordered entries (movie, show, season or episode), each with
+its episode count, runtime and watched share, plus list totals. Runtimes come from metadata, then the
+source, then Jellyfin. It feeds timeline views and Home's *Up Next* (the first unwatched entry of
+each list).
+
 Adding a source means writing an adapter that produces `SourceItem[]` and registering how its lists
 are fetched in `sync/lists.ts`. Matching, dedup, status and UI then work unchanged.
 
-## Data model (see `server/db/migrations/0001_initial.sql`)
+## Data model (see `server/db/migrations/`)
 
 | Table | Content |
 | --- | --- |
 | `users`, `sessions` | Local or Jellyfin-backed accounts. Sessions store `sha256(token)` and a CSRF token. |
 | `integrations` | Server-wide services. Config is JSON; secrets are AES-256-GCM encrypted. |
 | `connections` | Per-user source accounts (Trakt tokens encrypted, Letterboxd username). |
-| `lists`, `list_items` | Every imported list and its raw entries, with match status, method, confidence and candidates. |
+| `lists`, `list_items` | Every imported list (with its display: auto, grid or timeline) and its raw entries in list order, with season/episode numbers for partial entries, source runtimes, match status, method, confidence and candidates. |
 | `titles` | Canonical titles, unique on `(media_type, tmdb_id)`. |
 | `match_resolutions` | Manual match decisions keyed by a source fingerprint, reused on re-import. |
-| `jellyfin_items`, `jellyfin_user_data` | Library index and per-Jellyfin-user viewing state. |
+| `jellyfin_items`, `jellyfin_user_data`, `jellyfin_episodes` | Library index, per-Jellyfin-user viewing state, and episodes of listed series. |
+| `watch_history`, `watched_episodes` | Per-person viewing state that outlives the library, so deleted titles stay watched. |
 | `seerr_media`, `requests` | Mirror of Seerr media status and requests. |
 | `sync_runs`, `activity` | Job history and the Home activity feed. |
 
@@ -80,7 +86,7 @@ merged.
 | --- | --- | --- |
 | List contents | The source | `applyItems` replaces a list atomically after a *complete* fetch. Vanished entries are removed. Identity changes reset the match. Applying the same fetch twice changes nothing. |
 | Library availability | Jellyfin | Removed items are deleted only after a complete successful pass. A failed sync keeps the last known index and marks it **stale**. |
-| Viewing progress | Jellyfin user data for the linked account | Never written back. |
+| Viewing progress | Jellyfin user data for the linked account | Never written back. Copied to `watch_history` / `watched_episodes` while a title is in the library; used once it is gone. Live data wins while present (marking unwatched in Jellyfin clears the history). |
 | Requests | Seerr | Before a request is submitted, Seerr is checked live (`/movie|tv/{id}` as the user). Then duplicates (409), permissions, quota and blocklist (403), and missing seasons (202) are mapped to clear messages. |
 
 JellyWatcher is **read-only** towards every service except for creating Seerr requests. This avoids

@@ -4,11 +4,12 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ExternalLink, ListVideo, Pencil, Plus, Search, Trash2, Upload, Wand2, X } from 'lucide-react';
 import { del, errorText, get, patch, post, qs } from '../lib/api';
 import { useToast, useUser } from '../lib/session';
-import type { ListView, TitleCard } from '../lib/types';
-import { LIST_KIND_LABEL, PROVIDER_NAME, plural } from '../lib/format';
+import type { ListView, Timeline, TitleCard } from '../lib/types';
+import { LIST_KIND_LABEL, PROVIDER_NAME, duration, plural } from '../lib/format';
 import { Banner, CenterLoading, ConfirmSheet, EmptyState, ErrorState, PageHeader, PosterSkeletons, ProviderMark, SearchField, Segmented, Sheet, Spinner, SyncButton, Time, Toggle } from '../components/ui';
 import { PosterGrid, PosterImage } from '../components/Poster';
 import { AddListSheet, UploadBox, useInvalidateLists } from '../components/AddList';
+import { TimelineSummaryPanel, TimelineView } from '../components/Timeline';
 
 interface CatalogResponse {
   total: number;
@@ -33,17 +34,16 @@ export function WatchlistsPage() {
       <PageHeader title="Watchlists" />
       <nav className="segmented" aria-label="Watchlist views" style={{ marginBottom: 20 }}>
         {[
-          { to: '/watchlists', label: 'All Titles', end: true },
           { to: '/watchlists/lists', label: 'Lists' },
           { to: '/watchlists/review', label: n ? `Needs Review (${n})` : 'Needs Review' },
         ].map((t) => (
-          <NavLink key={t.to} to={t.to} end={t.end} style={({ isActive }) => segStyle(isActive)}>
+          <NavLink key={t.to} to={t.to} style={({ isActive }) => segStyle(isActive)}>
             {t.label}
           </NavLink>
         ))}
       </nav>
       <Routes>
-        <Route index element={<Catalog />} />
+        <Route index element={<Navigate to="/watchlists/lists" replace />} />
         <Route path="lists" element={<ListsOverview />} />
         <Route path="lists/:id" element={<ListDetail />} />
         <Route path="review" element={<ReviewQueue />} />
@@ -70,8 +70,8 @@ function segStyle(active: boolean): React.CSSProperties {
 
 const PAGE = 120;
 
-/** Filterable, searchable catalog. Filter state lives in the URL so views can be shared and restored. */
-export function Catalog({ listId }: { listId?: number }) {
+/** Filterable, searchable grid of one list. Filter state lives in the URL so views can be shared and restored. */
+function Catalog({ listId }: { listId: number }) {
   const { user } = useUser();
   const [params, setParams] = useSearchParams();
   const [text, setText] = useState(params.get('q') ?? '');
@@ -90,13 +90,13 @@ export function Catalog({ listId }: { listId?: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
-  const filters = { listId, q: get_('q'), type: get_('type'), provider: get_('provider'), genre: get_('genre'), availability: get_('availability'), request: get_('request'), viewing: get_('viewing'), sort: get_('sort') };
+  const filters = { listId, q: get_('q'), type: get_('type'), genre: get_('genre'), availability: get_('availability'), request: get_('request'), viewing: get_('viewing'), sort: get_('sort') };
   const query = useQuery({
     queryKey: ['catalog', filters, limit],
     queryFn: ({ signal }) => get<CatalogResponse>(`/catalog${qs({ ...filters, limit })}`, signal),
     placeholderData: keepPreviousData,
   });
-  const active = ['type', 'provider', 'genre', 'availability', 'request', 'viewing'].filter((k) => params.get(k)).length;
+  const active = ['type', 'genre', 'availability', 'request', 'viewing'].filter((k) => params.get(k)).length;
   const clear = () => {
     setText('');
     setParams(new URLSearchParams(), { replace: true });
@@ -106,7 +106,7 @@ export function Catalog({ listId }: { listId?: number }) {
     <>
       <div className="toolbar-sticky">
         <div className="toolbar">
-          <SearchField value={text} onChange={setText} placeholder="Search titles" label="Search titles in your watchlists" />
+          <SearchField value={text} onChange={setText} placeholder="Search this list" label="Search titles in this list" />
           <Segmented
             label="Type"
             value={(get_('type') || 'all') as 'all' | 'movie' | 'tv'}
@@ -119,9 +119,6 @@ export function Catalog({ listId }: { listId?: number }) {
           />
         </div>
         <div className="toolbar" style={{ marginTop: 10 }}>
-          {!listId && (
-            <FilterSelect label="Source" value={get_('provider')} onChange={(v) => setParam('provider', v)} options={[['trakt', 'Trakt'], ['letterboxd', 'Letterboxd'], ['imdb', 'IMDb']]} />
-          )}
           <FilterSelect label="Library" value={get_('availability')} onChange={(v) => setParam('availability', v)} options={[['in_library', 'In Library'], ['not_in_library', 'Not in Library'], ['unknown', 'Unknown']]} />
           <FilterSelect label="Request" value={get_('request')} onChange={(v) => setParam('request', v)} options={[['not_requested', 'Not Requested'], ['active', 'Requested'], ['available', 'Available in Seerr'], ['declined', 'Declined'], ['failed', 'Failed']]} />
           {user.jellyfin && <FilterSelect label="Watched" value={get_('viewing')} onChange={(v) => setParam('viewing', v)} options={[['unwatched', 'Unwatched'], ['in_progress', 'In Progress'], ['watched', 'Watched']]} />}
@@ -131,8 +128,8 @@ export function Catalog({ listId }: { listId?: number }) {
           <span className="spacer" />
           <label className="inline footnote secondary">
             Sort
-            <select className="select select-compact" value={get_('sort') || (listId ? 'position' : 'added')} onChange={(e) => setParam('sort', e.target.value)} aria-label="Sort by">
-              {listId && <option value="position">List Order</option>}
+            <select className="select select-compact" value={get_('sort') || 'position'} onChange={(e) => setParam('sort', e.target.value)} aria-label="Sort by">
+              <option value="position">List Order</option>
               <option value="added">Date Added</option>
               <option value="title">Title</option>
               <option value="year">Release Year</option>
@@ -154,15 +151,11 @@ export function Catalog({ listId }: { listId?: number }) {
       ) : query.data!.total === 0 ? (
         active > 0 || text ? (
           <EmptyState icon={<Search size={26} />} title="No Matches" actions={<button className="btn" onClick={clear}>Clear Filters</button>}>
-            Nothing in your watchlists matches these filters.
-          </EmptyState>
-        ) : listId ? (
-          <EmptyState icon={<ListVideo size={26} />} title="This List Is Empty">
-            Titles appear here after the list syncs and its entries are matched.
+            Nothing in this list matches these filters.
           </EmptyState>
         ) : (
-          <EmptyState icon={<ListVideo size={26} />} title="No Titles Yet" actions={<Link className="btn btn-primary" to="/watchlists/lists?add=1">Add a Watchlist</Link>}>
-            Add a list from Trakt, Letterboxd or IMDb and its titles show up here, combined and without duplicates.
+          <EmptyState icon={<ListVideo size={26} />} title="This List Is Empty">
+            Titles appear here after the list syncs and its entries are matched.
           </EmptyState>
         )
       ) : (
@@ -199,6 +192,15 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
   );
 }
 
+function summaryLine(l: ListView) {
+  const s = l.summary;
+  if (!s) return plural(l.itemCount, 'entry', 'entries');
+  const parts = [s.films > 0 && plural(s.films, 'film'), s.shows > 0 && plural(s.shows, 'show'), s.episodes > 0 && plural(s.episodes, 'episode')].filter(Boolean) as string[];
+  if (parts.length === 0) parts.push(plural(l.itemCount, 'entry', 'entries'));
+  if (l.timeline && s.totalMinutes > 0) parts.push(s.remainingMinutes > 0 ? `${duration(s.remainingMinutes)} left` : 'all watched');
+  return parts.join(' · ');
+}
+
 function syncLine(l: ListView) {
   if (l.lastStatus === 'running') return 'Syncing…';
   if (!l.canSync) return l.lastSyncedAt ? 'Imported' : 'Not imported yet';
@@ -219,7 +221,7 @@ function ListsOverview() {
   return (
     <>
       <div className="toolbar" style={{ marginBottom: 18 }}>
-        <span className="secondary subhead">Each list syncs on its own and feeds the combined catalog.</span>
+        <span className="secondary subhead">Each list keeps its own order and syncs on its own.</span>
         <span className="spacer" />
         <button className="btn btn-primary" onClick={() => setAdding(true)}>
           <Plus size={16} aria-hidden /> Add List
@@ -247,7 +249,7 @@ function ListsOverview() {
                       {l.name}
                     </div>
                     <div className="row-sub">
-                      {LIST_KIND_LABEL[l.kind]} · {plural(l.itemCount, 'title')}
+                      {l.timeline ? 'Timeline' : LIST_KIND_LABEL[l.kind]} · {summaryLine(l)}
                       {l.needsReview > 0 && ` · ${l.needsReview} to review`}
                     </div>
                     <div className="caption secondary inline" style={{ gap: 6, marginTop: 2 }}>
@@ -404,7 +406,7 @@ function ListDetail() {
           </p>
         )}
       </div>
-      <Catalog listId={id} />
+      <ListContent list={l} onDisplay={(display) => update({ display })} />
       <ConfirmSheet
         open={confirmDelete}
         onClose={() => setConfirmDelete(false)}
@@ -447,6 +449,53 @@ function ListDetail() {
           <p className="secondary subhead">Upload the latest CSV for this list. Titles no longer in the file are removed; your match decisions are kept.</p>
           <UploadBox provider={l.provider} replaceListId={l.id} onDone={() => setReplacing(false)} />
         </Sheet>
+      )}
+    </>
+  );
+}
+
+/** A list's titles, as a timeline (list order, with seasons and episodes) or as a poster grid. */
+function ListContent({ list, onDisplay }: { list: ListView; onDisplay: (d: 'grid' | 'timeline') => void }) {
+  const view = list.timeline ? 'timeline' : 'grid';
+  const timeline = useQuery({
+    queryKey: ['lists', list.id, 'timeline'],
+    queryFn: () => get<Timeline>(`/lists/${list.id}/timeline`),
+    enabled: view === 'timeline',
+    refetchInterval: list.pending ? 4000 : false,
+  });
+  return (
+    <>
+      <div className="toolbar" style={{ marginBottom: 16 }}>
+        <Segmented
+          label="View"
+          value={view}
+          onChange={onDisplay}
+          options={[
+            { value: 'timeline', label: 'Timeline' },
+            { value: 'grid', label: 'Grid' },
+          ]}
+        />
+        <span className="footnote secondary">{view === 'timeline' ? 'Every entry in list order, including single seasons and episodes.' : 'One poster per title.'}</span>
+      </div>
+      {list.summary && list.summary.entries > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <TimelineSummaryPanel summary={list.summary} />
+        </div>
+      )}
+      {view === 'grid' ? (
+        <Catalog listId={list.id} />
+      ) : timeline.isLoading ? (
+        <CenterLoading />
+      ) : timeline.isError ? (
+        <ErrorState error={timeline.error} onRetry={() => timeline.refetch()} />
+      ) : timeline.data!.entries.length === 0 ? (
+        <EmptyState icon={<ListVideo size={26} />} title="This List Is Empty">
+          Entries appear here after the list syncs.
+        </EmptyState>
+      ) : (
+        <div className="panel" style={{ padding: '6px 16px' }}>
+          <TimelineView timeline={timeline.data!} />
+        </div>
       )}
     </>
   );

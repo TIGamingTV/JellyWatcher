@@ -17,6 +17,10 @@ export interface TitleRow {
   backdrop_path: string | null;
   genres: string;
   runtime: number | null;
+  episode_count: number | null;
+  season_count: number | null;
+  /** JSON [{ season, episodes }] for regular seasons. */
+  seasons: string | null;
   metadata_source: string | null;
   metadata_updated_at: string | null;
 }
@@ -101,7 +105,8 @@ export class TitleService {
         .prepare(
           `UPDATE titles SET media_type = ?, tmdb_id = ?, imdb_id = COALESCE(?, imdb_id), tvdb_id = COALESCE(?, tvdb_id), title = ?, original_title = ?,
              year = COALESCE(?, year), release_date = ?, overview = COALESCE(?, overview), poster_path = COALESCE(?, poster_path),
-             backdrop_path = COALESCE(?, backdrop_path), genres = ?, runtime = ?, metadata_source = ?, metadata_updated_at = ?, metadata_error = NULL, updated_at = ?
+             backdrop_path = COALESCE(?, backdrop_path), genres = ?, runtime = ?, episode_count = ?, season_count = ?, seasons = ?,
+             metadata_source = ?, metadata_updated_at = ?, metadata_error = NULL, updated_at = ?
            WHERE id = ?`,
         )
         .run(
@@ -118,6 +123,9 @@ export class TitleService {
           meta.backdropPath,
           JSON.stringify(meta.genres),
           meta.runtime,
+          meta.episodeCount ?? null,
+          meta.seasonCount ?? null,
+          meta.seasons ? JSON.stringify(meta.seasons.filter((x) => x.seasonNumber > 0).map((x) => ({ season: x.seasonNumber, episodes: x.episodeCount }))) : null,
           source,
           nowIso(),
           nowIso(),
@@ -137,6 +145,10 @@ export class TitleService {
     this.db.transaction(() => {
       for (const table of ['list_items', 'jellyfin_items', 'requests', 'activity', 'match_resolutions']) {
         this.db.prepare(`UPDATE ${table} SET title_id = ? WHERE title_id = ?`).run(intoId, fromId);
+      }
+      // Keyed by title: keep the surviving row's entry when both exist (the rest cascades away).
+      for (const table of ['watch_history', 'watched_episodes']) {
+        this.db.prepare(`UPDATE OR IGNORE ${table} SET title_id = ? WHERE title_id = ?`).run(intoId, fromId);
       }
       this.db.prepare('DELETE FROM titles WHERE id = ?').run(fromId);
     })();

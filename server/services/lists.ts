@@ -22,7 +22,19 @@ export interface ListRow {
   last_status: string | null;
   last_error: string | null;
   item_count: number;
+  display: ListDisplay;
   created_at: string;
+}
+
+export type ListDisplay = 'auto' | 'grid' | 'timeline';
+
+const TIMELINE_HINT = /\b(timeline|chrono|chronolog\w*|watch[\s-]?order|viewing[\s-]?order|in order|release order|story order|reihenfolge|zeitlinie|chronologie)\b/i;
+
+/** Whether a list is shown as a timeline: the person's choice, or a guess from the list's name. */
+export function isTimeline(list: Pick<ListRow, 'display' | 'name' | 'description'>): boolean {
+  if (list.display === 'timeline') return true;
+  if (list.display === 'grid') return false;
+  return TIMELINE_HINT.test(list.name) || TIMELINE_HINT.test((list.description ?? '').slice(0, 300));
 }
 
 export interface ApplyResult {
@@ -120,11 +132,15 @@ export class ListService {
 
     const select = this.db.prepare('SELECT id, tmdb_id, imdb_id, tvdb_id, media_type, source_title, source_year FROM list_items WHERE list_id = ? AND source_key = ?');
     const insert = this.db.prepare(
-      `INSERT INTO list_items (list_id, source_key, media_type, source_title, source_year, tmdb_id, imdb_id, tvdb_id, source_url, position, listed_at, notes, rating, watched_at, match_status, first_seen_at, last_seen_at)
-       VALUES (@listId, @sourceKey, @mediaType, @title, @year, @tmdbId, @imdbId, @tvdbId, @sourceUrl, @position, @listedAt, @notes, @rating, @watchedAt, 'pending', @stamp, @stamp)`,
+      `INSERT INTO list_items (list_id, source_key, media_type, source_title, source_year, tmdb_id, imdb_id, tvdb_id, source_url, position, listed_at, notes, rating, watched_at,
+         season_number, episode_number, episode_title, source_runtime, source_episodes, source_seasons, match_status, first_seen_at, last_seen_at)
+       VALUES (@listId, @sourceKey, @mediaType, @title, @year, @tmdbId, @imdbId, @tvdbId, @sourceUrl, @position, @listedAt, @notes, @rating, @watchedAt,
+         @season, @episode, @episodeTitle, @runtime, @episodes, @seasons, 'pending', @stamp, @stamp)`,
     );
     const touch = this.db.prepare(
-      'UPDATE list_items SET position = @position, listed_at = @listedAt, notes = @notes, rating = @rating, watched_at = @watchedAt, source_url = @sourceUrl, last_seen_at = @stamp WHERE id = @id',
+      `UPDATE list_items SET position = @position, listed_at = @listedAt, notes = @notes, rating = @rating, watched_at = @watchedAt, source_url = @sourceUrl,
+         season_number = @season, episode_number = @episode, episode_title = @episodeTitle, source_runtime = @runtime, source_episodes = @episodes, source_seasons = @seasons,
+         last_seen_at = @stamp WHERE id = @id`,
     );
     const reset = this.db.prepare(
       `UPDATE list_items SET media_type = @mediaType, source_title = @title, source_year = @year, tmdb_id = @tmdbId, imdb_id = @imdbId, tvdb_id = @tvdbId,
@@ -150,6 +166,12 @@ export class ListService {
           notes: item.notes ?? null,
           rating: item.rating ?? null,
           watchedAt: item.watchedAt ?? null,
+          season: item.seasonNumber ?? null,
+          episode: item.seasonNumber != null ? (item.episodeNumber ?? null) : null,
+          episodeTitle: item.episodeTitle ?? null,
+          runtime: item.runtime ?? null,
+          episodes: item.episodes ?? null,
+          seasons: item.seasons ?? null,
           stamp,
         };
         const row = select.get(listId, item.sourceKey) as
@@ -193,6 +215,10 @@ export class ListService {
 
   setAutoSync(listId: number, enabled: boolean): void {
     this.db.prepare('UPDATE lists SET auto_sync = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, nowIso(), listId);
+  }
+
+  setDisplay(listId: number, display: ListDisplay): void {
+    this.db.prepare('UPDATE lists SET display = ?, updated_at = ? WHERE id = ?').run(display, nowIso(), listId);
   }
 
   rename(listId: number, name: string): void {
