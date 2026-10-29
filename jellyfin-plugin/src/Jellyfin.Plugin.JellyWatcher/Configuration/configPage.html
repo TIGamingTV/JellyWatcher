@@ -5,7 +5,7 @@
     <title>JellyWatcher</title>
 </head>
 <body>
-    <div id="JellyWatcherConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+    <div id="JellyWatcherConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
         <div data-role="content">
             <div class="content-primary">
                 <h2 class="sectionTitle">JellyWatcher</h2>
@@ -40,6 +40,36 @@
                         <input is="emby-input" type="text" id="jwMenuIcon" maxlength="40" label="Menu icon" />
                         <div class="fieldDescription">A Material icon name, e.g. bookmarks, list or movie.</div>
                     </div>
+                    <h3 class="sectionTitle" style="margin-top: 1.5em;">Collections and playlists</h3>
+                    <p class="fieldDescription" style="margin-top: 0;">People can keep a list in Jellyfin as a collection or a private playlist, in the list's order, so it also shows up in apps like Infuse. The plugin only changes and deletes the collections and playlists it made.</p>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="jwMirrorEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Keep chosen lists in Jellyfin</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">When off, nothing is changed in Jellyfin (existing collections and playlists stay until you remove them below).</div>
+                    </div>
+                    <div class="selectContainer">
+                        <select is="emby-select" id="jwCollectionPermission" label="Who may show lists as collections">
+                            <option value="CollectionManagers">Administrators and people allowed to manage collections</option>
+                            <option value="Everyone">Everyone</option>
+                            <option value="Nobody">Nobody (private playlists only)</option>
+                        </select>
+                        <div class="fieldDescription">Collections are visible to everyone who can see the titles in them. Private playlists are always allowed.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="jwMirrorInterval" min="1" max="1440" step="1" label="Update every (minutes)" />
+                        <div class="fieldDescription">Changes are also applied right away when made on the Watchlists page, and shortly after library scans.</div>
+                    </div>
+                    <div id="jwMirrorStatus" class="fieldDescription" style="margin: 0 0 1em;"></div>
+                    <div>
+                        <button is="emby-button" type="button" id="jwMirrorRun" class="raised button-alt block emby-button">
+                            <span>Update Now</span>
+                        </button>
+                        <button is="emby-button" type="button" id="jwMirrorRemove" class="raised button-alt block emby-button">
+                            <span>Turn Off and Remove All</span>
+                        </button>
+                    </div>
                     <div id="jwTestResult" class="fieldDescription" style="margin: 0 0 1em; display:none;"></div>
                     <div>
                         <button is="emby-button" type="button" id="jwTest" class="raised button-alt block emby-button">
@@ -66,6 +96,32 @@
                     el.textContent = message;
                 }
 
+                function loadMirrorStatus() {
+                    ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('JellyWatcher/Mirrors/Status'), dataType: 'json' }).then(function (s) {
+                        var el = $('jwMirrorStatus');
+                        if (s.running) { el.textContent = 'Updating now…'; return; }
+                        el.textContent = s.lastRun ? 'Last update ' + new Date(s.lastRun.at).toLocaleString() + ': ' + s.lastRun.message : 'Not updated since Jellyfin started.';
+                        el.style.color = s.lastRun && !s.lastRun.ok ? '#ff6e6e' : '';
+                    }, function () { /* ignore */ });
+                }
+
+                $('jwMirrorRun').addEventListener('click', function () {
+                    $('jwMirrorStatus').textContent = 'Updating now…';
+                    ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('JellyWatcher/Mirrors/Sync'), data: '{}', contentType: 'application/json', dataType: 'json' }).then(function () {
+                        setTimeout(loadMirrorStatus, 4000);
+                    }, function () { $('jwMirrorStatus').textContent = 'The update could not be started.'; });
+                });
+
+                $('jwMirrorRemove').addEventListener('click', function () {
+                    Dashboard.confirm('This turns off “Keep chosen lists in Jellyfin” and deletes every collection and playlist the plugin made. Lists in JellyWatcher are not changed.', 'Remove all collections and playlists?', function (ok) {
+                        if (ok === false) return;
+                        ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('JellyWatcher/Mirrors/RemoveAll'), dataType: 'json' }).then(function (r) {
+                            $('jwMirrorEnabled').checked = false;
+                            $('jwMirrorStatus').textContent = 'Removed ' + r.removed + ' collection(s) and playlist(s).';
+                        }, function () { $('jwMirrorStatus').textContent = 'Removing failed.'; });
+                    });
+                });
+
                 page.addEventListener('pageshow', function () {
                     Dashboard.showLoadingMsg();
                     ApiClient.getPluginConfiguration(pluginId).then(function (config) {
@@ -76,11 +132,15 @@
                         $('jwPublicUrl').value = config.PublicUrl || '';
                         $('jwMenuLabel').value = config.MenuLabel || 'Watchlists';
                         $('jwMenuIcon').value = config.MenuIcon || 'bookmarks';
+                        $('jwMirrorEnabled').checked = config.MirrorEnabled !== false;
+                        $('jwCollectionPermission').value = config.CollectionPermission || 'CollectionManagers';
+                        $('jwMirrorInterval').value = config.MirrorIntervalMinutes || 5;
                         Dashboard.hideLoadingMsg();
                     });
                     ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('JellyWatcher/Setup'), dataType: 'json' }).then(function (s) {
                         $('jwSetupWarning').style.display = s.fileTransformation ? 'none' : 'block';
                     }, function () { /* ignore */ });
+                    loadMirrorStatus();
                 });
 
                 $('jwTest').addEventListener('click', function () {
@@ -104,6 +164,9 @@
                         config.PublicUrl = $('jwPublicUrl').value.trim();
                         config.MenuLabel = $('jwMenuLabel').value.trim() || 'Watchlists';
                         config.MenuIcon = $('jwMenuIcon').value.trim() || 'bookmarks';
+                        config.MirrorEnabled = $('jwMirrorEnabled').checked;
+                        config.CollectionPermission = $('jwCollectionPermission').value;
+                        config.MirrorIntervalMinutes = Math.min(1440, Math.max(1, parseInt($('jwMirrorInterval').value, 10) || 5));
                         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                             $('jwKey').value = '';
                             $('jwKey').setAttribute('placeholder', config.PluginKey ? 'Saved (hidden)' : 'jwp_…');

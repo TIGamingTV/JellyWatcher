@@ -4,7 +4,8 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowDownUp, CalendarClock, Copy, ExternalLink, ListPlus, ListVideo, Pencil, Plus, RotateCcw, Search, Trash2, Upload, Wand2, X } from 'lucide-react';
 import { del, errorText, get, patch, post, put, qs } from '../lib/api';
 import { useToast, useUser } from '../lib/session';
-import type { ListView, Timeline, TimelineEntry, TitleCard, UploadSource } from '../lib/types';
+import type { JellyfinMirrorMode, ListView, Timeline, TimelineEntry, TitleCard, UploadSource } from '../lib/types';
+import { MIRROR_HINT, MIRROR_INTRO, MIRROR_OPTIONS, mirrorStatus } from '../lib/mirror';
 import { LIST_KIND_LABEL, PROVIDER_NAME, duration, plural } from '../lib/format';
 import { Banner, CenterLoading, ConfirmSheet, EmptyState, ErrorState, PageHeader, PosterSkeletons, ProviderMark, SearchField, Segmented, Sheet, Spinner, SyncButton, Time, Toggle } from '../components/ui';
 import { PosterGrid, PosterImage } from '../components/Poster';
@@ -297,7 +298,12 @@ function ListDetail() {
   const toast = useToast();
   const invalidate = useInvalidateLists();
   const [params, setParams] = useSearchParams();
-  const q = useQuery({ queryKey: ['lists', id], queryFn: () => get<{ list: ListView }>(`/lists/${id}`), refetchInterval: (s) => (s.state.data?.list.pending ? 4000 : false) });
+  const { user, services } = useUser();
+  const q = useQuery({
+    queryKey: ['lists', id],
+    queryFn: () => get<{ list: ListView }>(`/lists/${id}`),
+    refetchInterval: (s) => (s.state.data?.list.pending ? 4000 : s.state.data?.list.jellyfin && !s.state.data.list.jellyfin.synced ? 15000 : false),
+  });
   const [syncing, setSyncing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -330,6 +336,15 @@ function ListDetail() {
     invalidate();
     toast('success', `Removed “${l.name}”.`);
     navigate('/watchlists/lists');
+  };
+  const setMirror = async (mode: JellyfinMirrorMode | null) => {
+    try {
+      await put(`/lists/${id}/mirror`, { mode });
+      invalidate();
+      toast('success', mode ? `“${l.name}” will appear in Jellyfin as a ${mode === 'collection' ? 'collection' : 'private playlist'} within a few minutes.` : `The Jellyfin ${l.jellyfin?.mode === 'playlist' ? 'playlist' : 'collection'} will be removed within a few minutes.`);
+    } catch (err) {
+      toast('error', errorText(err));
+    }
   };
   const update = async (body: Record<string, unknown>) => {
     try {
@@ -427,6 +442,7 @@ function ListDetail() {
             <Trash2 size={14} aria-hidden /> {l.editable ? 'Delete' : 'Remove'}
           </button>
         </div>
+        {services.jellyfinPlugin && <JellyfinSetting list={l} linked={Boolean(user.jellyfin)} onChange={(mode) => setMirror(mode)} />}
         {upload && (
           <p className="footnote secondary" style={{ marginTop: 10, marginBottom: 0 }}>
             This list was imported from a file, so it updates when you upload a newer export (or add the list by its link, where {PROVIDER_NAME[l.provider]} allows it). Duplicate it to add titles yourself.
@@ -501,6 +517,34 @@ function ListDetail() {
 }
 
 /** A list's titles: the timeline (standard; list order with seasons and episodes) or a poster grid. */
+function JellyfinSetting({ list, linked, onChange }: { list: ListView; linked: boolean; onChange: (mode: JellyfinMirrorMode | null) => void }) {
+  const value = list.jellyfin?.mode ?? 'off';
+  const status = list.jellyfin ? mirrorStatus(list.jellyfin) : null;
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="inline" style={{ gap: 12 }}>
+        <span className="subhead" style={{ fontWeight: 600 }}>
+          <ListVideo size={15} aria-hidden style={{ verticalAlign: '-2px', marginRight: 6 }} />
+          Show in Jellyfin
+        </span>
+        {linked || list.jellyfin ? (
+          <Segmented label="Show in Jellyfin" value={value} onChange={(v) => v !== value && onChange(v === 'off' ? null : v)} options={MIRROR_OPTIONS} />
+        ) : (
+          <span className="footnote secondary">Link your account to a Jellyfin account first (an administrator can do this in Settings › People).</span>
+        )}
+      </div>
+      <p className="footnote secondary" style={{ marginTop: 6, marginBottom: 0 }}>
+        {value === 'off' ? MIRROR_INTRO : MIRROR_HINT[value]}
+      </p>
+      {status && (
+        <p className="footnote" style={{ marginTop: 4, marginBottom: 0, color: status.kind === 'error' ? 'var(--red)' : undefined }}>
+          {status.kind === 'busy' && <Spinner />} {status.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ListContent({ list, onDisplay, onDiscover }: { list: ListView; onDisplay: (d: 'grid' | 'timeline') => void; onDiscover: () => void }) {
   const view = list.timeline ? 'timeline' : 'grid';
   const qc = useQueryClient();

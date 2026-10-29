@@ -28,7 +28,7 @@ const ServerUrl = z.string().trim().min(1).max(500).transform((v, c) => {
 
 export { usernameFromJellyfin };
 
-export async function authRoutes(app: FastifyInstance, { ctx, users, sessions, setupCode, quickConnect }: AppDeps) {
+export async function authRoutes(app: FastifyInstance, { ctx, users, sessions, setupCode, quickConnect, pluginKeys }: AppDeps) {
   const startSession = (req: FastifyRequest, reply: FastifyReply, userId: number) => {
     const s = sessions.create(userId, { userAgent: req.headers['user-agent'], ip: req.ip });
     setSessionCookie(reply, req, ctx, s.token, s.expiresAt);
@@ -293,6 +293,8 @@ export async function authRoutes(app: FastifyInstance, { ctx, users, sessions, s
         seerr: ctx.integrations.isReady('seerr'),
         tmdb: ctx.integrations.isReady('tmdb'),
         trakt: ctx.integrations.isReady('trakt'),
+        /** The JellyWatcher plugin for Jellyfin is set up (lists can be shown in Jellyfin). */
+        jellyfinPlugin: pluginKeys.get() !== null,
         metadata: ctx.metadata()?.name ?? null,
       },
       sources: SOURCE_DESCRIPTORS,

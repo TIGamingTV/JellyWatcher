@@ -16,6 +16,7 @@ public static class PluginRoutes
         ("GET", Make("^lists$")),
         ("GET", Make("^lists/[0-9]{1,12}(/timeline)?$")),
         ("POST", Make("^lists/[0-9]{1,12}/sync$")),
+        ("PUT", Make("^lists/[0-9]{1,12}/mirror$")),
         ("POST", Make("^lists/(link|local|trakt)$")),
         ("GET", Make("^titles/[0-9]{1,12}/eligibility$")),
         ("POST", Make("^titles/[0-9]{1,12}/request$")),

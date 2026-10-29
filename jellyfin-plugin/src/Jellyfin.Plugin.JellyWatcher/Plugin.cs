@@ -30,7 +30,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public override Guid Id => PluginId;
 
     /// <inheritdoc />
-    public override string Description => "Your JellyWatcher watchlists and timelines inside Jellyfin, with Request, Not Watching and Watched buttons.";
+    public override string Description => "Your JellyWatcher watchlists and timelines inside Jellyfin, with Request, Not Watching and Watched buttons, and lists kept as collections or private playlists in their order.";
 
     /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()

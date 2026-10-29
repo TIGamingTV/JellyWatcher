@@ -18,6 +18,7 @@ import { listInfoFromJson, parseTraktListUrl } from '../providers/trakt.js';
 import { SOURCE_DESCRIPTORS, UPLOAD_SOURCES, type ListFetchResult, type SourceListInfo, type UploadSource } from '../providers/types.js';
 import { requireUser, type SessionUser } from '../security/auth.js';
 import { isTimeline, LOCAL_PROVIDER, type ListRow } from '../services/lists.js';
+import { mirrorView } from '../services/mirrors.js';
 import { autoOrder, buildTimelines, entryReleaseDates, type TimelineSummary } from '../services/timeline.js';
 import { syncList, type TraktListRef } from '../sync/lists.js';
 import { triggerJob } from '../sync/scheduler.js';
@@ -61,6 +62,8 @@ export function listView(ctx: AppContext, l: ListRow, summary?: TimelineSummary)
     /** The person reordered the entries (kept across syncs). */
     customOrder: ctx.lists.hasCustomOrder(l.id),
     summary: summary ?? null,
+    /** Shown in Jellyfin as a collection or a private playlist (kept up to date by the plugin). */
+    jellyfin: mirrorView(ctx, l),
     createdAt: l.created_at,
   };
 }
@@ -562,6 +565,20 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
     }
     if (body.autoSync !== undefined) ctx.lists.setAutoSync(id, body.autoSync);
     if (body.display) ctx.lists.setDisplay(id, body.display);
+    return { list: listView(ctx, ctx.lists.get(id)!) };
+  });
+
+  /** Shows the list in Jellyfin as a collection or a private playlist, or stops (the plugin then deletes it). */
+  app.put('/lists/:id/mirror', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    const body = parse(z.object({ mode: z.enum(['collection', 'playlist']).nullable() }), req.body);
+    const l = ctx.lists.getOwned(id, u.id);
+    if (!l) throw new ApiError(404, 'not_found', 'List not found.');
+    if (body.mode && !u.jellyfinUserId) {
+      throw new ApiError(400, 'jellyfin_not_linked', 'Your JellyWatcher account is not linked to a Jellyfin account. Ask an administrator to link it in Settings › People.');
+    }
+    if (l.jellyfin_mirror !== body.mode) ctx.lists.setMirror(id, body.mode);
     return { list: listView(ctx, ctx.lists.get(id)!) };
   });
 

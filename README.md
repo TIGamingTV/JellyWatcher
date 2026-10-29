@@ -101,7 +101,8 @@ The database is backed up to `data/backups/` and migrated automatically on start
   are private per person.
 - **Inside Jellyfin (optional):** the [Jellyfin plugin](docs/jellyfin-plugin.md) adds a Watchlists
   page to Jellyfin's menu with your lists, their timelines, and Play, Request, Not Watching and
-  Watched on every entry.
+  Watched on every entry. It can also keep any list in Jellyfin as a **collection** or a **private
+  playlist** in your order, so it shows up in every Jellyfin app, including Infuse.
 - **Homelab-friendly:** one container, SQLite with automatic backups, non-root and read-only,
   encrypted credentials, health check, optional webhooks. Works on phones, tablets and desktops.
 

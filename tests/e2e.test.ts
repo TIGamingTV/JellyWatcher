@@ -464,6 +464,40 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     expect((await plugin('GET', '/api/images/tmdb/w185/not-a-poster-here.jpg', h())).status).toBe(404);
     expect((await admin.get('/api/images/tmdb/w185/not-a-poster-here.jpg')).status).toBe(200);
 
+    // Lists shown in Jellyfin: chosen per list, handed to the plugin in list order, status reported back.
+    expect((await admin.get('/api/auth/me')).data.services.jellyfinPlugin).toBe(true);
+    expect((await plugin('GET', '/api/plugin/mirrors', h())).data.lists).toEqual([]);
+    expect((await admin.get('/api/plugin/mirrors')).status).toBe(401);
+    expect((await plugin('PUT', `/api/lists/${imdbListId}/mirror`, h(ALICE_JF), { mode: 'shelf' })).status).toBe(400);
+    const on1 = await plugin('PUT', `/api/lists/${imdbListId}/mirror`, h(ALICE_JF), { mode: 'collection' });
+    expect(on1.data.list.jellyfin).toMatchObject({ mode: 'collection', synced: false, applied: 0 });
+    const payload = (await plugin('GET', '/api/plugin/mirrors', h())).data;
+    expect(payload.instanceId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(payload.lists).toHaveLength(1);
+    expect(payload.lists[0]).toMatchObject({ listId: imdbListId, mode: 'collection', owner: ALICE_JF, name: expect.any(String) });
+    const mirrored = payload.lists[0].entries;
+    expect(mirrored.map((e: any) => e.jellyfinItemId)).toEqual([HEAT_JF, 'e101'.padEnd(32, '0'), null, SEV_JF]);
+    expect(mirrored.map((e: any) => e.kind)).toEqual(tl.data.entries.map((e: any) => e.kind));
+    expect(mirrored[0]).toMatchObject({ mediaType: 'movie', tmdbId: expect.any(String), jellyfinIds: [HEAT_JF] });
+    // "Not Watching" entries are left out.
+    await plugin('PUT', `/api/titles/${thief}/skipped`, h(ALICE_JF), { skipped: true });
+    expect((await plugin('GET', '/api/plugin/mirrors', h())).data.lists[0].entries).toHaveLength(3);
+    await plugin('PUT', `/api/titles/${thief}/skipped`, h(ALICE_JF), { skipped: false });
+
+    const report = (results: unknown[]) => plugin('POST', '/api/plugin/mirrors/report', h(), { results });
+    const row = (over: Record<string, unknown> = {}) => ({ listId: imdbListId, mode: 'collection', jellyfinId: 'C'.repeat(32), applied: 3, missing: 1, error: null, ...over });
+    expect((await report([row(), row({ listId: 999999 })])).data.saved).toBe(1);
+    expect((await report([row({ jellyfinId: '../x' })])).status).toBe(400);
+    expect((await admin.get(`/api/lists/${imdbListId}`)).data.list.jellyfin).toMatchObject({ mode: 'collection', synced: true, applied: 3, missing: 1, jellyfinId: 'c'.repeat(32), error: null });
+    // Switching to a playlist starts over; a late report for the collection is ignored.
+    expect((await admin.put(`/api/lists/${imdbListId}/mirror`, { mode: 'playlist' })).data.list.jellyfin).toMatchObject({ mode: 'playlist', synced: false });
+    expect((await report([row()])).data.saved).toBe(0);
+    expect((await report([row({ mode: 'playlist', error: 'Your Jellyfin account may not create collections.' })])).data.saved).toBe(1);
+    expect((await admin.get(`/api/lists/${imdbListId}`)).data.list.jellyfin.error).toMatch(/may not/);
+    // Off: the list leaves the payload, so the plugin deletes what it made.
+    expect((await plugin('PUT', `/api/lists/${imdbListId}/mirror`, h(ALICE_JF), { mode: null })).data.list.jellyfin).toBeNull();
+    expect((await plugin('GET', '/api/plugin/mirrors', h())).data.lists).toEqual([]);
+
     // Unknown Jellyfin users follow the sign-in rules: refused, or created when allowed.
     const stranger = 'f'.repeat(32);
     expect((await plugin('GET', '/api/lists', h(stranger))).data.error.code).toBe('not_invited');

@@ -1,3 +1,4 @@
+using Jellyfin.Plugin.JellyWatcher.Mirrors;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.JellyWatcher.Configuration;
@@ -24,4 +25,13 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Gets or sets the Material icon of the menu entry.</summary>
     public string MenuIcon { get; set; } = "bookmarks";
+
+    /// <summary>Gets or sets a value indicating whether lists people choose are kept in Jellyfin as collections or playlists.</summary>
+    public bool MirrorEnabled { get; set; } = true;
+
+    /// <summary>Gets or sets how often (minutes) the collections and playlists are updated.</summary>
+    public int MirrorIntervalMinutes { get; set; } = 5;
+
+    /// <summary>Gets or sets who may show lists as collections (collections are visible to everyone who can see the titles).</summary>
+    public CollectionPermission CollectionPermission { get; set; } = CollectionPermission.CollectionManagers;
 }

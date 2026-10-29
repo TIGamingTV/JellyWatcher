@@ -38,6 +38,7 @@ implementation treats them defensively (tolerant parsing, feature detection, exp
 | --- | --- | --- |
 | List membership | The source service (API, public list page or feed, uploaded file, RSS) | none |
 | "Not watching" | The person (`skipped_entries`); a title that is watched is never shown as skipped | none |
+| Collections and playlists shown in Jellyfin | JellyWatcher (`lists.jellyfin_mirror`, the list's order); applied by the Jellyfin plugin, which only touches what it created | none |
 | Title identity and metadata | TMDb (direct, or proxied through Seerr) | Source-provided title and year |
 | Request state | Seerr (`MediaRequest.status`) | none; shown as "Unknown" when not synced |
 | Library availability | Jellyfin (`/Items` index) | Seerr `mediaInfo.status`, labelled "reported by Seerr" |

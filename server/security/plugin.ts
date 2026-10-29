@@ -33,10 +33,13 @@ interface PluginRoute {
 export const PLUGIN_ROUTES: PluginRoute[] = [
   { method: 'GET', path: /^\/api\/plugin\/status$/, user: false },
   { method: 'GET', path: /^\/api\/images\/tmdb\/w\d{2,4}\/[A-Za-z0-9_-]{1,100}\.(jpg|jpeg|png|webp)$/i, user: false },
+  { method: 'GET', path: /^\/api\/plugin\/mirrors$/, user: false },
+  { method: 'POST', path: /^\/api\/plugin\/mirrors\/report$/, user: false },
   { method: 'GET', path: /^\/api\/plugin\/bootstrap$/, user: true },
   { method: 'GET', path: /^\/api\/lists$/, user: true },
   { method: 'GET', path: /^\/api\/lists\/\d{1,12}(\/timeline)?$/, user: true },
   { method: 'POST', path: /^\/api\/lists\/\d{1,12}\/sync$/, user: true },
+  { method: 'PUT', path: /^\/api\/lists\/\d{1,12}\/mirror$/, user: true },
   { method: 'POST', path: /^\/api\/lists\/(link|local|trakt)$/, user: true },
   { method: 'GET', path: /^\/api\/titles\/\d{1,12}\/eligibility$/, user: true },
   { method: 'POST', path: /^\/api\/titles\/\d{1,12}\/request$/, user: true },

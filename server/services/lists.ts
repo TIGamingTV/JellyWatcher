@@ -24,10 +24,13 @@ export interface ListRow {
   last_error: string | null;
   item_count: number;
   display: ListDisplay;
+  /** Shown in Jellyfin through the plugin, as a collection or a private playlist. */
+  jellyfin_mirror: JellyfinMirror | null;
   created_at: string;
 }
 
 export type ListDisplay = 'auto' | 'grid' | 'timeline';
+export type JellyfinMirror = 'collection' | 'playlist';
 
 /** Whether a list is shown as a timeline. The timeline is the standard view; the grid is opt-in. */
 export function isTimeline(list: Pick<ListRow, 'display'>): boolean {
@@ -240,6 +243,14 @@ export class ListService {
 
   setDisplay(listId: number, display: ListDisplay): void {
     this.db.prepare('UPDATE lists SET display = ?, updated_at = ? WHERE id = ?').run(display, nowIso(), listId);
+  }
+
+  /** Turns the Jellyfin collection/playlist on, switches its kind, or turns it off. The plugin's last report is dropped. */
+  setMirror(listId: number, mode: JellyfinMirror | null): void {
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE lists SET jellyfin_mirror = ?, updated_at = ? WHERE id = ?').run(mode, nowIso(), listId);
+      this.db.prepare('DELETE FROM list_mirrors WHERE list_id = ?').run(listId);
+    })();
   }
 
   rename(listId: number, name: string): void {

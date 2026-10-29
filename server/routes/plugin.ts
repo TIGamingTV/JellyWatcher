@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../app.js';
 import { ApiError } from '../http/errors.js';
+import { parse } from '../http/validate.js';
 import { requireAdmin, requireUser } from '../security/auth.js';
+import { MirrorReportSchema, mirrorPayload, recordMirrorReports } from '../services/mirrors.js';
 
 /** Plugin repository manifest to add in Jellyfin › Dashboard › Plugins › Repositories. */
 export const PLUGIN_REPOSITORY_URL = 'https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/jellyfin-plugin/manifest.json';
@@ -34,6 +36,19 @@ export async function pluginRoutes(app: FastifyInstance, { ctx, pluginKeys }: Ap
       trakt: { available: ctx.integrations.isReady('trakt'), connected: Boolean(trakt), watchlistImported: traktWatchlist },
       tmdb: { available: ctx.integrations.isReady('tmdb') },
     };
+  });
+
+  /** The collections and playlists the plugin should keep in Jellyfin, for every person. */
+  app.get('/plugin/mirrors', async (req) => {
+    if (!req.viaPlugin) throw new ApiError(401, 'plugin_key', 'This endpoint is for the Jellyfin plugin.');
+    return mirrorPayload(ctx);
+  });
+
+  /** What the plugin did with each list (shown next to the list's Jellyfin setting). */
+  app.post('/plugin/mirrors/report', async (req) => {
+    if (!req.viaPlugin) throw new ApiError(401, 'plugin_key', 'This endpoint is for the Jellyfin plugin.');
+    const body = parse(MirrorReportSchema, req.body);
+    return { ok: true, saved: recordMirrorReports(ctx, body.results) };
   });
 
   const view = (key: string | null) => ({

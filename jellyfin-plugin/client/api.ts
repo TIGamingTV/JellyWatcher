@@ -1,4 +1,4 @@
-import type { Eligibility, ListView, Timeline } from '../../web/src/lib/types';
+import type { Eligibility, JellyfinMirrorMode, ListView, Timeline } from '../../web/src/lib/types';
 
 /** Calls to JellyWatcher, sent through the plugin with the person's Jellyfin session. */
 
@@ -82,6 +82,9 @@ export const api = {
   list: (id: number) => jw<{ list: ListView }>('GET', `lists/${id}`),
   timeline: (id: number) => jw<Timeline>('GET', `lists/${id}/timeline`),
   sync: (id: number) => jw<{ list: ListView }>('POST', `lists/${id}/sync`, {}),
+  mirror: (id: number, mode: JellyfinMirrorMode | null) => jw<{ list: ListView }>('PUT', `lists/${id}/mirror`, { mode }),
+  /** Asks the plugin to update the Jellyfin collections and playlists now instead of at the next interval. */
+  applyMirrors: () => request<{ started: boolean }>('POST', 'JellyWatcher/Mirrors/Sync', {}),
   addLink: (url: string) => jw<{ list: ListView }>('POST', 'lists/link', { url }),
   addLocal: (name: string) => jw<{ list: ListView }>('POST', 'lists/local', { name }),
   addTraktWatchlist: () => jw<{ list: ListView }>('POST', 'lists/trakt', { mode: 'watchlist' }),
