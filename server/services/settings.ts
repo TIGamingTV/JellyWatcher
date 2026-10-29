@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   'sync.jellyfinIntervalMinutes': 30,
   'sync.seerrIntervalMinutes': 10,
   'sync.metadataIntervalMinutes': 720,
-  'auth.jellyfinLogin': false,
+  'auth.jellyfinLogin': true,
   'auth.jellyfinAutoCreate': false,
   'requests.defaultIs4k': false,
 };

@@ -34,7 +34,7 @@ export function App() {
     );
   }
   if (me.data.needsSetup) return <SetupPage />;
-  if (!me.data.user) return <LoginPage jellyfinLogin={me.data.jellyfinLogin} />;
+  if (!me.data.user) return <LoginPage me={me.data} />;
   return (
     <Routes>
       <Route element={<Shell />}>
@@ -139,6 +139,9 @@ function Shell() {
           <NavLink to="/settings" className="icon-btn" aria-label="Settings">
             <SettingsIcon size={20} />
           </NavLink>
+          <button className="icon-btn" onClick={signOut} aria-label="Sign out" title="Sign out">
+            <LogOut size={19} />
+          </button>
         </div>
       </div>
 

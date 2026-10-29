@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { AlertTriangle, ExternalLink, ListVideo, Pencil, Plus, Search, Trash2, Upload, Wand2, X } from 'lucide-react';
-import { del, errorText, get, patch, post, qs } from '../lib/api';
+import { AlertTriangle, ArrowDownUp, Copy, ExternalLink, ListPlus, ListVideo, Pencil, Plus, RotateCcw, Search, Trash2, Upload, Wand2, X } from 'lucide-react';
+import { del, errorText, get, patch, post, put, qs } from '../lib/api';
 import { useToast, useUser } from '../lib/session';
-import type { ListView, Timeline, TitleCard } from '../lib/types';
+import type { ListView, Timeline, TimelineEntry, TitleCard } from '../lib/types';
 import { LIST_KIND_LABEL, PROVIDER_NAME, duration, plural } from '../lib/format';
 import { Banner, CenterLoading, ConfirmSheet, EmptyState, ErrorState, PageHeader, PosterSkeletons, ProviderMark, SearchField, Segmented, Sheet, Spinner, SyncButton, Time, Toggle } from '../components/ui';
 import { PosterGrid, PosterImage } from '../components/Poster';
 import { AddListSheet, UploadBox, useInvalidateLists } from '../components/AddList';
-import { TimelineSummaryPanel, TimelineView } from '../components/Timeline';
+import { entryHeading, TimelineSummaryPanel, TimelineView } from '../components/Timeline';
+import { DiscoverSheet, DuplicateSheet, NewListSheet } from '../components/LocalLists';
+import { useQueryClient } from '@tanstack/react-query';
 
 interface CatalogResponse {
   total: number;
@@ -121,7 +123,7 @@ function Catalog({ listId }: { listId: number }) {
         <div className="toolbar" style={{ marginTop: 10 }}>
           <FilterSelect label="Library" value={get_('availability')} onChange={(v) => setParam('availability', v)} options={[['in_library', 'In Library'], ['not_in_library', 'Not in Library'], ['unknown', 'Unknown']]} />
           <FilterSelect label="Request" value={get_('request')} onChange={(v) => setParam('request', v)} options={[['not_requested', 'Not Requested'], ['active', 'Requested'], ['available', 'Available in Seerr'], ['declined', 'Declined'], ['failed', 'Failed']]} />
-          {user.jellyfin && <FilterSelect label="Watched" value={get_('viewing')} onChange={(v) => setParam('viewing', v)} options={[['unwatched', 'Unwatched'], ['in_progress', 'In Progress'], ['watched', 'Watched']]} />}
+          <FilterSelect label="Watched" value={get_('viewing')} onChange={(v) => setParam('viewing', v)} options={[['unwatched', 'Unwatched'], ['in_progress', 'In Progress'], ['watched', 'Watched']]} />
           {query.data && query.data.facets.genres.length > 0 && (
             <FilterSelect label="Genre" value={get_('genre')} onChange={(v) => setParam('genre', v)} options={query.data.facets.genres.map((g) => [g.name, `${g.name} (${g.count})`])} />
           )}
@@ -203,6 +205,7 @@ function summaryLine(l: ListView) {
 
 function syncLine(l: ListView) {
   if (l.lastStatus === 'running') return 'Syncing…';
+  if (l.editable) return 'Kept in JellyWatcher';
   if (!l.canSync) return l.lastSyncedAt ? 'Imported' : 'Not imported yet';
   return l.lastSyncedAt ? 'Synced' : 'Never synced';
 }
@@ -212,6 +215,7 @@ function ListsOverview() {
   const lists = useQuery({ queryKey: ['lists'], queryFn: () => get<{ lists: ListView[] }>('/lists'), refetchInterval: (q) => (q.state.data?.lists.some((l) => l.lastStatus === 'running' || l.pending > 0) ? 4000 : false) });
   const adding = params.get('add') === '1';
   const setAdding = (v: boolean) => setParams(v ? { add: '1' } : {}, { replace: true });
+  const [creating, setCreating] = useState(false);
   const grouped = useMemo(() => {
     const g = new Map<string, ListView[]>();
     for (const l of lists.data?.lists ?? []) g.set(l.provider, [...(g.get(l.provider) ?? []), l]);
@@ -221,8 +225,11 @@ function ListsOverview() {
   return (
     <>
       <div className="toolbar" style={{ marginBottom: 18 }}>
-        <span className="secondary subhead">Each list keeps its own order and syncs on its own.</span>
+        <span className="secondary subhead">Each list keeps its own order and syncs on its own. Drag entries into any order you like.</span>
         <span className="spacer" />
+        <button className="btn" onClick={() => setCreating(true)}>
+          <ListPlus size={16} aria-hidden /> New List
+        </button>
         <button className="btn btn-primary" onClick={() => setAdding(true)}>
           <Plus size={16} aria-hidden /> Add List
         </button>
@@ -238,7 +245,7 @@ function ListsOverview() {
         {[...grouped.entries()].map(([provider, ls]) => (
           <section key={provider} aria-labelledby={`p-${provider}`}>
             <h2 className="group-title" id={`p-${provider}`}>
-              {PROVIDER_NAME[provider]}
+              {provider === 'local' ? 'Your Lists' : PROVIDER_NAME[provider]}
             </h2>
             <div className="list-cards">
               {ls.map((l) => (
@@ -249,7 +256,7 @@ function ListsOverview() {
                       {l.name}
                     </div>
                     <div className="row-sub">
-                      {l.timeline ? 'Timeline' : LIST_KIND_LABEL[l.kind]} · {summaryLine(l)}
+                      {LIST_KIND_LABEL[l.kind]} · {summaryLine(l)}
                       {l.needsReview > 0 && ` · ${l.needsReview} to review`}
                     </div>
                     <div className="caption secondary inline" style={{ gap: 6, marginTop: 2 }}>
@@ -264,8 +271,9 @@ function ListsOverview() {
                         </>
                       ) : (
                         <>
-                          <span className={`dot ${l.lastSyncedAt ? 'dot-green' : 'dot-gray'}`} aria-hidden />
-                          {syncLine(l)} {l.lastSyncedAt && <Time iso={l.lastSyncedAt} />}
+                          <span className={`dot ${l.editable ? 'dot-gray' : l.lastSyncedAt ? 'dot-green' : 'dot-gray'}`} aria-hidden />
+                          {syncLine(l)} {l.lastSyncedAt && !l.editable && <Time iso={l.lastSyncedAt} />}
+                          {l.customOrder && ' · Your order'}
                           {l.canSync && !l.autoSync && ' · Manual'}
                         </>
                       )}
@@ -278,6 +286,7 @@ function ListsOverview() {
         ))}
       </div>
       <AddListSheet open={adding} onClose={() => setAdding(false)} />
+      <NewListSheet open={creating} onClose={() => setCreating(false)} />
     </>
   );
 }
@@ -287,16 +296,22 @@ function ListDetail() {
   const navigate = useNavigate();
   const toast = useToast();
   const invalidate = useInvalidateLists();
+  const [params, setParams] = useSearchParams();
   const q = useQuery({ queryKey: ['lists', id], queryFn: () => get<{ list: ListView }>(`/lists/${id}`), refetchInterval: (s) => (s.state.data?.list.pending ? 4000 : false) });
   const [syncing, setSyncing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [replacing, setReplacing] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
+  const discovering = params.get('discover') === '1';
+  const setDiscovering = (v: boolean) => setParams(v ? { discover: '1' } : {}, { replace: true });
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
 
   if (q.isLoading) return <CenterLoading />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   const l = q.data!.list;
+  const upload = !l.canSync && !l.editable;
 
   const sync = async () => {
     setSyncing(true);
@@ -328,29 +343,33 @@ function ListDetail() {
   return (
     <>
       <div className="panel" style={{ marginBottom: 20 }}>
-        <div className="inline" style={{ alignItems: 'flex-start', gap: 16 }}>
+        <div className="inline" style={{ alignItems: 'flex-start', gap: 16, flexWrap: 'nowrap' }}>
           <ProviderMark provider={l.provider} size={48} />
           <div className="row-main">
-            <h2 className="title-2">{l.name}</h2>
+            <h2 className="title-2" style={{ overflowWrap: 'anywhere' }}>{l.name}</h2>
             <div className="secondary subhead" style={{ marginTop: 4 }}>
-              {PROVIDER_NAME[l.provider]} {LIST_KIND_LABEL[l.kind]?.toLowerCase()}
-              {l.ownerName && ` by ${l.ownerName}`} · {plural(l.itemCount, 'entry', 'entries')} · {plural(l.matched, 'matched title')}
+              {l.editable ? 'Your list' : `${PROVIDER_NAME[l.provider]} ${LIST_KIND_LABEL[l.kind]?.toLowerCase()}`}
+              {l.ownerName && ` by ${l.ownerName}`} · {plural(l.itemCount, 'entry', 'entries')}
+              {!l.editable && ` · ${plural(l.matched, 'matched title')}`}
+              {l.customOrder && ' · your order'}
             </div>
             {l.description && (
-              <p className="subhead" style={{ marginTop: 8, maxWidth: '70ch' }}>
+              <p className="subhead" style={{ marginTop: 8, maxWidth: '70ch', whiteSpace: 'pre-line' }}>
                 {l.description}
               </p>
             )}
-            <div className="footnote secondary" style={{ marginTop: 6 }}>
-              {l.lastSyncedAt ? (
-                <>
-                  Last successful {l.canSync ? 'sync' : 'import'} <Time iso={l.lastSyncedAt} />
-                </>
-              ) : (
-                'Not synced yet'
-              )}
-              {l.pending > 0 && ` · Matching ${l.pending} entries…`}
-            </div>
+            {!l.editable && (
+              <div className="footnote secondary" style={{ marginTop: 6 }}>
+                {l.lastSyncedAt ? (
+                  <>
+                    Last successful {l.canSync ? 'sync' : 'import'} <Time iso={l.lastSyncedAt} />
+                  </>
+                ) : (
+                  'Not synced yet'
+                )}
+                {l.pending > 0 && ` · Matching ${l.pending} entries…`}
+              </div>
+            )}
           </div>
         </div>
         {l.lastStatus === 'error' && (
@@ -368,7 +387,11 @@ function ListDetail() {
           </div>
         )}
         <div className="toolbar" style={{ marginTop: 16 }}>
-          {l.canSync ? (
+          {l.editable ? (
+            <button className="btn btn-primary" onClick={() => setDiscovering(true)}>
+              <Plus size={15} aria-hidden /> Add Titles
+            </button>
+          ) : l.canSync ? (
             <>
               <SyncButton busy={syncing || l.lastStatus === 'running'} onClick={sync} label="Sync Now" />
               <label className="inline subhead">
@@ -387,39 +410,52 @@ function ListDetail() {
               Open on {PROVIDER_NAME[l.provider]} <ExternalLink size={14} aria-hidden />
             </a>
           )}
+          <button className="btn btn-plain" onClick={() => setDuplicating(true)} title="Make an editable copy">
+            <Copy size={14} aria-hidden /> Duplicate
+          </button>
           <button
             className="btn btn-plain"
             onClick={() => {
               setName(l.name);
+              setDescription(l.description ?? '');
               setRenaming(true);
             }}
           >
-            <Pencil size={14} aria-hidden /> Rename
+            <Pencil size={14} aria-hidden /> {l.editable ? 'Edit Details' : 'Rename'}
           </button>
           <button className="btn btn-plain" style={{ color: 'var(--red)' }} onClick={() => setConfirmDelete(true)}>
-            <Trash2 size={14} aria-hidden /> Remove
+            <Trash2 size={14} aria-hidden /> {l.editable ? 'Delete' : 'Remove'}
           </button>
         </div>
-        {!l.canSync && (
+        {upload && (
           <p className="footnote secondary" style={{ marginTop: 10, marginBottom: 0 }}>
-            {PROVIDER_NAME[l.provider]} offers no API for personal projects, so this list updates when you upload a newer export.
+            {PROVIDER_NAME[l.provider]} offers no API for personal projects, so this list updates when you upload a newer export. Duplicate it to add titles yourself.
+          </p>
+        )}
+        {l.canSync && (
+          <p className="footnote secondary" style={{ marginTop: 10, marginBottom: 0 }}>
+            Entries come from {PROVIDER_NAME[l.provider]}. Your order is kept across syncs; duplicate the list to add or remove titles here.
           </p>
         )}
       </div>
-      <ListContent list={l} onDisplay={(display) => update({ display })} />
+      <ListContent list={l} onDisplay={(display) => update({ display })} onDiscover={() => setDiscovering(true)} />
       <ConfirmSheet
         open={confirmDelete}
         onClose={() => setConfirmDelete(false)}
         onConfirm={remove}
         destructive
-        title={`Remove “${l.name}”?`}
-        confirmLabel="Remove List"
-        message="The list and its entries are removed from JellyWatcher. Nothing changes on the source service, and requests you made stay in Seerr."
+        title={`${l.editable ? 'Delete' : 'Remove'} “${l.name}”?`}
+        confirmLabel={l.editable ? 'Delete List' : 'Remove List'}
+        message={
+          l.editable
+            ? 'The list and its entries are deleted. Watched marks and requests are kept.'
+            : 'The list and its entries are removed from JellyWatcher. Nothing changes on the source service, and requests you made stay in Seerr.'
+        }
       />
       <Sheet
         open={renaming}
         onClose={() => setRenaming(false)}
-        title="Rename List"
+        title={l.editable ? 'Edit List' : 'Rename List'}
         footer={
           <>
             <button className="btn btn-gray" onClick={() => setRenaming(false)}>
@@ -429,7 +465,7 @@ function ListDetail() {
               className="btn btn-primary"
               disabled={!name.trim()}
               onClick={async () => {
-                await update({ name: name.trim() });
+                await update(l.editable ? { name: name.trim(), description: description.trim() || null } : { name: name.trim() });
                 setRenaming(false);
               }}
             >
@@ -438,11 +474,19 @@ function ListDetail() {
           </>
         }
       >
-        <label className="field">
-          <span className="field-label">Name</span>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} autoFocus />
-          {l.canSync && <span className="field-hint">The next sync may restore the name used on {PROVIDER_NAME[l.provider]}.</span>}
-        </label>
+        <div className="stack">
+          <label className="field">
+            <span className="field-label">Name</span>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} autoFocus />
+            {l.canSync && <span className="field-hint">The next sync may restore the name used on {PROVIDER_NAME[l.provider]}.</span>}
+          </label>
+          {l.editable && (
+            <label className="field">
+              <span className="field-label">Description</span>
+              <textarea className="textarea" rows={4} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} />
+            </label>
+          )}
+        </div>
       </Sheet>
       {(l.provider === 'letterboxd' || l.provider === 'imdb') && (
         <Sheet open={replacing} onClose={() => setReplacing(false)} title="Upload New Export">
@@ -450,34 +494,93 @@ function ListDetail() {
           <UploadBox provider={l.provider} replaceListId={l.id} onDone={() => setReplacing(false)} />
         </Sheet>
       )}
+      {duplicating && <DuplicateSheet list={l} open onClose={() => setDuplicating(false)} />}
+      {l.editable && <DiscoverSheet list={l} open={discovering} onClose={() => setDiscovering(false)} />}
     </>
   );
 }
 
-/** A list's titles, as a timeline (list order, with seasons and episodes) or as a poster grid. */
-function ListContent({ list, onDisplay }: { list: ListView; onDisplay: (d: 'grid' | 'timeline') => void }) {
+/** A list's titles: the timeline (standard; list order with seasons and episodes) or a poster grid. */
+function ListContent({ list, onDisplay, onDiscover }: { list: ListView; onDisplay: (d: 'grid' | 'timeline') => void; onDiscover: () => void }) {
   const view = list.timeline ? 'timeline' : 'grid';
+  const qc = useQueryClient();
+  const toast = useToast();
+  const invalidate = useInvalidateLists();
+  const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState<TimelineEntry | null>(null);
   const timeline = useQuery({
     queryKey: ['lists', list.id, 'timeline'],
     queryFn: () => get<Timeline>(`/lists/${list.id}/timeline`),
     enabled: view === 'timeline',
-    refetchInterval: list.pending ? 4000 : false,
+    refetchInterval: list.pending && !editing ? 4000 : false,
   });
+
+  const saveOrder = async (itemIds: number[]) => {
+    try {
+      await put(`/lists/${list.id}/order`, { itemIds });
+      void qc.invalidateQueries({ queryKey: ['lists'] });
+      void qc.invalidateQueries({ queryKey: ['home'] });
+    } catch (err) {
+      toast('error', `The new order was not saved: ${errorText(err)}`);
+      void timeline.refetch();
+    }
+  };
+  const resetOrder = async () => {
+    try {
+      await del(`/lists/${list.id}/order`);
+      invalidate();
+      toast('success', list.editable ? 'Back to the order titles were added in.' : `Back to the order on ${PROVIDER_NAME[list.provider]}.`);
+    } catch (err) {
+      toast('error', errorText(err));
+    }
+  };
+  const removeEntry = async (e: TimelineEntry) => {
+    try {
+      await del(`/lists/${list.id}/items/${e.itemId}`);
+      invalidate();
+      toast('success', `Removed ${entryHeading(e).title}.`);
+    } catch (err) {
+      toast('error', errorText(err));
+    } finally {
+      setRemoving(null);
+    }
+  };
+
+  const count = timeline.data?.entries.length ?? 0;
   return (
     <>
       <div className="toolbar" style={{ marginBottom: 16 }}>
         <Segmented
           label="View"
           value={view}
-          onChange={onDisplay}
+          onChange={(v) => {
+            setEditing(false);
+            onDisplay(v);
+          }}
           options={[
             { value: 'timeline', label: 'Timeline' },
             { value: 'grid', label: 'Grid' },
           ]}
         />
-        <span className="footnote secondary">{view === 'timeline' ? 'Every entry in list order, including single seasons and episodes.' : 'One poster per title.'}</span>
+        {view === 'timeline' && count > 0 && (
+          <button className={`btn ${editing ? 'btn-primary' : 'btn-gray'}`} onClick={() => setEditing(!editing)} aria-pressed={editing}>
+            {editing ? 'Done' : (
+              <>
+                <ArrowDownUp size={15} aria-hidden /> {list.editable ? 'Edit' : 'Reorder'}
+              </>
+            )}
+          </button>
+        )}
+        {view === 'timeline' && list.customOrder && (
+          <button className="btn btn-plain" onClick={resetOrder}>
+            <RotateCcw size={14} aria-hidden /> {list.editable ? 'Reset Order' : `Use ${PROVIDER_NAME[list.provider]} Order`}
+          </button>
+        )}
+        <span className="footnote secondary tl-hint">
+          {editing ? 'Drag the handles, or focus one and use the arrow keys.' : view === 'timeline' ? 'Every entry in your order, including single seasons and episodes.' : 'One poster per title.'}
+        </span>
       </div>
-      {list.summary && list.summary.entries > 0 && (
+      {list.summary && list.summary.entries > 0 && !editing && (
         <div style={{ marginBottom: 20 }}>
           <TimelineSummaryPanel summary={list.summary} />
         </div>
@@ -489,14 +592,29 @@ function ListContent({ list, onDisplay }: { list: ListView; onDisplay: (d: 'grid
       ) : timeline.isError ? (
         <ErrorState error={timeline.error} onRetry={() => timeline.refetch()} />
       ) : timeline.data!.entries.length === 0 ? (
-        <EmptyState icon={<ListVideo size={26} />} title="This List Is Empty">
-          Entries appear here after the list syncs.
-        </EmptyState>
+        list.editable ? (
+          <EmptyState icon={<ListPlus size={26} />} title="Nothing Here Yet" actions={<button className="btn btn-primary" onClick={onDiscover}><Plus size={15} aria-hidden /> Add Titles</button>}>
+            Search for movies and shows or browse what’s trending, then put them in the order you want to watch them.
+          </EmptyState>
+        ) : (
+          <EmptyState icon={<ListVideo size={26} />} title="This List Is Empty">
+            Entries appear here after the list syncs.
+          </EmptyState>
+        )
       ) : (
-        <div className="panel" style={{ padding: '6px 16px' }}>
-          <TimelineView timeline={timeline.data!} />
+        <div className="panel tl-panel">
+          <TimelineView timeline={timeline.data!} editing={editing} removable={list.editable} onOrder={saveOrder} onRemove={setRemoving} />
         </div>
       )}
+      <ConfirmSheet
+        open={Boolean(removing)}
+        onClose={() => setRemoving(null)}
+        onConfirm={() => removing && removeEntry(removing)}
+        destructive
+        title={`Remove ${removing ? [entryHeading(removing).title, entryHeading(removing).part].filter(Boolean).join(' · ') : ''}?`}
+        confirmLabel="Remove"
+        message="It is removed from this list only. Watched marks stay."
+      />
     </>
   );
 }

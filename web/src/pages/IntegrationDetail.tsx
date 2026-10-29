@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, Navigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, Copy, ExternalLink, Eye, EyeOff, RefreshCw } from 'lucide-react';
+import { ChevronLeft, Copy, ExternalLink, Eye, EyeOff, RefreshCw, Smartphone } from 'lucide-react';
 import { del, errorText, get, post, put } from '../lib/api';
 import { useRefreshMe, useToast, useUser } from '../lib/session';
-import type { IntegrationView, SourcesResponse, SyncRun, TestResult } from '../lib/types';
+import type { IntegrationView, QuickConnectStart, SourcesResponse, SyncRun, TestResult } from '../lib/types';
 import { plural } from '../lib/format';
 import { Banner, CenterLoading, ConfirmSheet, Field, PageHeader, ProviderMark, Spinner, SyncButton, Time, Toggle } from '../components/ui';
 import { AddListSheet, UploadBox, UploadInstructions, useInvalidateLists } from '../components/AddList';
 import { SERVICE_COPY } from './Integrations';
+import { QuickConnectPanel } from '../components/QuickConnect';
 
 const VALID = ['jellyfin', 'seerr', 'tmdb', 'trakt', 'letterboxd', 'imdb'];
 
@@ -341,6 +342,7 @@ function JellyfinPage() {
   const [form, setForm] = useState({ username: user.jellyfin?.username ?? user.username, password: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [quick, setQuick] = useState(false);
 
   const link = async (e: FormEvent) => {
     e.preventDefault();
@@ -375,7 +377,7 @@ function JellyfinPage() {
           fields={[
             { key: 'url', label: 'Server URL', type: 'url', placeholder: 'http://jellyfin:8096', hint: 'The address JellyWatcher’s container uses to reach Jellyfin, e.g. a container name on the same Docker network, a LAN IP, or a public URL. Include any base path.' },
             { key: 'publicUrl', label: 'Browser URL', type: 'url', optional: true, placeholder: 'https://jellyfin.example.com', hint: 'Used for “Play in Jellyfin” links if browsers reach Jellyfin at a different address.' },
-            { key: 'apiKey', label: 'API key', secret: true, placeholder: 'Paste the key', hint: 'In Jellyfin: Dashboard › API Keys › +. Name it “JellyWatcher”. API keys have administrator access; it is stored encrypted and never shown again.' },
+            { key: 'apiKey', label: 'API key', secret: true, placeholder: 'Paste the key', hint: 'Created automatically when you set JellyWatcher up with Jellyfin. To replace it: Jellyfin › Dashboard › API Keys › +, name it “JellyWatcher”. It is stored encrypted and never shown again.' },
           ]}
         />
       )}
@@ -392,6 +394,19 @@ function JellyfinPage() {
                 Unlink
               </button>
             </div>
+          ) : quick ? (
+            <div className="form-stack">
+              <QuickConnectPanel
+                start={() => post<QuickConnectStart>('/connections/jellyfin/quick-connect')}
+                poll={(id) => post('/connections/jellyfin/quick-connect/poll', { id })}
+                onAuthorized={async () => {
+                  toast('success', 'Jellyfin account linked. Viewing progress appears after the next sync.');
+                  setQuick(false);
+                  await refreshMe();
+                }}
+                onCancel={() => setQuick(false)}
+              />
+            </div>
           ) : (
             <form className="form-stack" onSubmit={link}>
               <Field label="Jellyfin username">{(id) => <input id={id} className="input" autoComplete="username" autoCapitalize="none" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />}</Field>
@@ -401,6 +416,9 @@ function JellyfinPage() {
                 <button className="btn btn-primary" type="submit" disabled={busy || !form.username}>
                   {busy && <Spinner />}
                   Link Account
+                </button>
+                <button className="btn btn-gray" type="button" onClick={() => setQuick(true)}>
+                  <Smartphone size={15} aria-hidden /> Use Quick Connect
                 </button>
               </div>
             </form>

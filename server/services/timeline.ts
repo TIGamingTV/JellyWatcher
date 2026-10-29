@@ -3,8 +3,9 @@ import { parseJson } from '../db/index.js';
 import type { SessionUser } from '../security/auth.js';
 import { lifecycleStage, type AvailabilityState, type LifecycleStage } from '../../shared/status.js';
 import { card, cardRows, userCtx, type Card, type CardRow } from './cards.js';
-import type { ListRow } from './lists.js';
+import { ITEM_ORDER, type ListRow } from './lists.js';
 import type { TitleStatus } from './status.js';
+import { loadManualMarks, manualDateFor, manualEpisodeKeys, seasonSizes, type ManualMarks } from './watched.js';
 
 /**
  * Ordered view of a list: every entry in list order (movies, whole shows, single seasons, single
@@ -41,6 +42,10 @@ export interface TimelineEntry {
   availability: AvailabilityState;
   stage: LifecycleStage;
   sourceUrl: string | null;
+  /** When the person marked this entry (or what contains it) as watched; null without a manual mark. */
+  manualAt: string | null;
+  /** When it was watched, if known. */
+  watchedAt: string | null;
 }
 
 export interface TimelineSummary {
@@ -105,7 +110,7 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
         `SELECT id, list_id, title_id, media_type, source_title, source_year, source_url, match_status, season_number, episode_number, episode_title,
                 source_runtime, source_episodes, source_seasons
            FROM list_items WHERE list_id IN (${ph}) AND match_status != 'ignored'
-          ORDER BY list_id, position IS NULL, position, id`,
+          ORDER BY list_id, ${ITEM_ORDER}`,
       )
       .all(...c) as ItemRow[],
   );
@@ -123,12 +128,20 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
   }
 
   const tvIds = titleIds.filter((id) => rows.get(id)?.media_type === 'tv');
+  const marks = loadManualMarks(ctx.db, user.id, titleIds);
   const watched = new Map<number, Set<string>>();
   for (const r of inChunks(tvIds, (c, ph) =>
     ctx.db.prepare(`SELECT title_id, season, episode FROM watched_episodes WHERE user_id = ? AND title_id IN (${ph})`).all(user.id, ...c) as { title_id: number; season: number; episode: number }[],
   )) {
     if (!watched.has(r.title_id)) watched.set(r.title_id, new Set());
     watched.get(r.title_id)!.add(key(r.season, r.episode));
+  }
+  for (const id of tvIds) {
+    const m = marks.get(id);
+    if (!m) continue;
+    const set = watched.get(id) ?? new Set<string>();
+    for (const k of manualEpisodeKeys(m, seasonSizes(rows.get(id)!.seasons))) set.add(k);
+    watched.set(id, set);
   }
   const present = new Map<number, Map<string, number | null>>();
   for (const r of inChunks(tvIds, (c, ph) =>
@@ -152,6 +165,7 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
         jfRuntime: i.title_id !== null ? (jfRuntime.get(i.title_id) ?? null) : null,
         watched: (i.title_id !== null && watched.get(i.title_id)) || new Set<string>(),
         present: i.title_id !== null ? present.get(i.title_id) : undefined,
+        marks: i.title_id !== null ? marks.get(i.title_id) : undefined,
       }),
     );
     out.set(listId, { entries, summary: summarize(entries), nextIndex: nextIndex(entries) });
@@ -167,6 +181,8 @@ interface EntryContext {
   watched: Set<string>;
   /** Episodes in the library (season:episode → minutes); undefined when not indexed. */
   present: Map<string, number | null> | undefined;
+  /** The person's own watch marks for this title. */
+  marks: ManualMarks | undefined;
 }
 
 function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry {
@@ -185,6 +201,7 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
     episode: i.episode_number,
     episodeTitle: i.episode_title,
     sourceUrl: i.source_url,
+    manualAt: matched ? manualDateFor(c.marks, i.season_number, i.season_number !== null ? i.episode_number : null) : null,
   };
 
   if (!matched || !c.row || !c.status) {
@@ -200,6 +217,7 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
       percent: 0,
       availability: 'unknown',
       stage: 'unknown',
+      watchedAt: null,
     };
   }
 
@@ -222,6 +240,7 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
       percent: pct,
       availability: s.availability.state,
       stage: s.stage,
+      watchedAt: state === 'watched' ? (base.manualAt ?? s.viewing.progress?.lastPlayedAt ?? null) : null,
     };
   }
 
@@ -249,20 +268,32 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
     const n = i.season_number!;
     const inSeason = regularPresent.filter(([k]) => k.startsWith(`${n}:`));
     episodes = seasonSizes.find((x) => x.season === n)?.episodes ?? i.source_episodes ?? (inSeason.length || null);
-    watchedEps = showWatched && episodes !== null ? episodes : [...c.watched].filter((k) => k.startsWith(`${n}:`)).length;
+    watchedEps = (showWatched || base.manualAt) && episodes !== null ? episodes : [...c.watched].filter((k) => k.startsWith(`${n}:`)).length;
     runtime = episodes !== null && perEpisode !== null ? episodes * perEpisode : null;
     if (c.present) availability = inSeason.length === 0 ? (s.availability.state === 'unknown' ? 'unknown' : 'not_in_library') : episodes !== null && inSeason.length >= episodes ? 'in_library' : 'partially_in_library';
   } else {
     const k = key(i.season_number!, i.episode_number!);
     episodes = 1;
-    watchedEps = showWatched || c.watched.has(k) ? 1 : 0;
+    watchedEps = showWatched || base.manualAt || c.watched.has(k) ? 1 : 0;
     runtime = i.source_runtime ?? c.present?.get(k) ?? perEpisode;
     if (c.present) availability = c.present.has(k) ? 'in_library' : s.availability.state === 'unknown' ? 'unknown' : 'not_in_library';
   }
 
   if (episodes !== null) watchedEps = Math.min(watchedEps, episodes);
   const state: EntryState =
-    episodes !== null ? (watchedEps >= episodes && episodes > 0 ? 'watched' : watchedEps > 0 ? 'in_progress' : 'unwatched') : showWatched ? 'watched' : watchedEps > 0 ? 'in_progress' : 'unwatched';
+    base.manualAt && kind !== 'show'
+      ? 'watched'
+      : episodes !== null
+        ? watchedEps >= episodes && episodes > 0
+          ? 'watched'
+          : watchedEps > 0
+            ? 'in_progress'
+            : 'unwatched'
+        : showWatched
+          ? 'watched'
+          : watchedEps > 0
+            ? 'in_progress'
+            : 'unwatched';
   const pct = state === 'watched' ? 100 : episodes ? Math.round((watchedEps / episodes) * 100) : 0;
   const watchedMinutes = runtime === null ? 0 : state === 'watched' ? runtime : episodes ? Math.round((runtime * watchedEps) / episodes) : 0;
   const entryViewing = state === 'watched' ? 'watched' : state === 'in_progress' ? 'in_progress' : 'unwatched';
@@ -277,6 +308,7 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
     percent: pct,
     availability,
     stage: kind === 'show' ? s.stage : lifecycleStage(availability, s.request.state, entryViewing),
+    watchedAt: state === 'watched' ? (base.manualAt ?? (kind === 'show' ? (s.viewing.progress?.lastPlayedAt ?? null) : null)) : null,
   };
 }
 

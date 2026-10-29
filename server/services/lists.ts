@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { nowIso, parseJson, type DB } from '../db/index.js';
 import { errorMessage } from '../http/errors.js';
 import { scrub } from '../logger.js';
@@ -28,14 +29,34 @@ export interface ListRow {
 
 export type ListDisplay = 'auto' | 'grid' | 'timeline';
 
-const TIMELINE_HINT = /\b(timeline|chrono|chronolog\w*|watch[\s-]?order|viewing[\s-]?order|in order|release order|story order|reihenfolge|zeitlinie|chronologie)\b/i;
-
-/** Whether a list is shown as a timeline: the person's choice, or a guess from the list's name. */
-export function isTimeline(list: Pick<ListRow, 'display' | 'name' | 'description'>): boolean {
-  if (list.display === 'timeline') return true;
-  if (list.display === 'grid') return false;
-  return TIMELINE_HINT.test(list.name) || TIMELINE_HINT.test((list.description ?? '').slice(0, 300));
+/** Whether a list is shown as a timeline. The timeline is the standard view; the grid is opt-in. */
+export function isTimeline(list: Pick<ListRow, 'display'>): boolean {
+  return list.display !== 'grid';
 }
+
+/** Lists created in JellyWatcher (new or duplicated): edited here, never synced. */
+export const LOCAL_PROVIDER = 'local';
+
+export interface LocalItemInput {
+  titleId: number;
+  mediaType: 'movie' | 'tv';
+  title: string;
+  year: number | null;
+  tmdbId: number;
+  season?: number | null;
+  episode?: number | null;
+  episodeTitle?: string | null;
+}
+
+export function localSourceKey(i: Pick<LocalItemInput, 'mediaType' | 'tmdbId' | 'season' | 'episode'>): string {
+  const part = i.season != null ? (i.episode != null ? `:s${i.season}e${i.episode}` : `:s${i.season}`) : '';
+  return `tmdb:${i.mediaType}:${i.tmdbId}${part}`;
+}
+
+const ITEM_COLUMNS = `source_key, title_id, media_type, source_title, source_year, tmdb_id, imdb_id, tvdb_id, source_url, listed_at, notes, rating, watched_at,
+  match_status, match_method, match_confidence, match_candidates, match_attempts, season_number, episode_number, episode_title, source_runtime, source_episodes, source_seasons`;
+/** Effective order of a list's entries: the person's own order first, then the source's order. */
+export const ITEM_ORDER = 'COALESCE(custom_position, 1000000 + COALESCE(position, 1000000)), id';
 
 export interface ApplyResult {
   added: number;
@@ -58,7 +79,7 @@ export class ListService {
   }
 
   forUser(userId: number): ListRow[] {
-    return this.db.prepare('SELECT * FROM lists WHERE user_id = ? ORDER BY provider, kind = \'watchlist\' DESC, name COLLATE NOCASE').all(userId) as ListRow[];
+    return this.db.prepare("SELECT * FROM lists WHERE user_id = ? ORDER BY provider = 'local' DESC, provider, kind = 'watchlist' DESC, name COLLATE NOCASE").all(userId) as ListRow[];
   }
 
   ref<T extends Record<string, unknown>>(list: ListRow): T {
@@ -225,8 +246,116 @@ export class ListService {
     this.db.prepare('UPDATE lists SET name = ?, updated_at = ? WHERE id = ?').run(name, nowIso(), listId);
   }
 
+  setDescription(listId: number, description: string | null): void {
+    this.db.prepare('UPDATE lists SET description = ?, updated_at = ? WHERE id = ?').run(description, nowIso(), listId);
+  }
+
   remove(listId: number): void {
     this.db.prepare('DELETE FROM lists WHERE id = ?').run(listId);
+  }
+
+  /** A new, empty list that lives only in JellyWatcher. */
+  createLocal(userId: number, name: string, description: string | null = null, display: ListDisplay = 'timeline'): number {
+    const now = nowIso();
+    const res = this.db
+      .prepare(
+        `INSERT INTO lists (user_id, provider, kind, external_id, source_ref, name, description, auto_sync, sync_supported, display, last_synced_at, last_status, created_at, updated_at)
+         VALUES (?, ?, 'local', ?, '{}', ?, ?, 0, 0, ?, ?, 'ok', ?, ?)`,
+      )
+      .run(userId, LOCAL_PROVIDER, `local:${randomUUID()}`, name, description, display, now, now, now);
+    return Number(res.lastInsertRowid);
+  }
+
+  /**
+   * Copies a list into a new local list in its current (possibly personal) order, keeping every
+   * entry's match so nothing needs reviewing again.
+   */
+  duplicate(listId: number, userId: number, name: string): number {
+    const src = this.getOwned(listId, userId);
+    if (!src) throw new Error('list not found');
+    return this.db.transaction(() => {
+      const id = this.createLocal(userId, name, src.description, src.display);
+      const stamp = nowIso();
+      this.db
+        .prepare(
+          `INSERT INTO list_items (list_id, position, first_seen_at, last_seen_at, ${ITEM_COLUMNS})
+           SELECT ?, ROW_NUMBER() OVER (ORDER BY ${ITEM_ORDER}), ?, ?, ${ITEM_COLUMNS} FROM list_items WHERE list_id = ?`,
+        )
+        .run(id, stamp, stamp, listId);
+      this.refreshCount(id);
+      return id;
+    })();
+  }
+
+  refreshCount(listId: number): number {
+    const n = (this.db.prepare('SELECT COUNT(*) AS n FROM list_items WHERE list_id = ?').get(listId) as { n: number }).n;
+    this.db.prepare('UPDATE lists SET item_count = ?, updated_at = ? WHERE id = ?').run(n, nowIso(), listId);
+    return n;
+  }
+
+  /** Adds a matched title (or one season / episode of a show) to the end of a local list. */
+  addLocalItem(listId: number, item: LocalItemInput): number {
+    const key = localSourceKey(item);
+    return this.db.transaction(() => {
+      if (this.db.prepare('SELECT 1 FROM list_items WHERE list_id = ? AND source_key = ?').get(listId, key)) return -1;
+      const max = this.db.prepare('SELECT MAX(position) AS p, MAX(custom_position) AS c FROM list_items WHERE list_id = ?').get(listId) as { p: number | null; c: number | null };
+      const stamp = nowIso();
+      const res = this.db
+        .prepare(
+          `INSERT INTO list_items (list_id, source_key, title_id, media_type, source_title, source_year, tmdb_id, position, custom_position, listed_at,
+             season_number, episode_number, episode_title, match_status, match_method, match_confidence, first_seen_at, last_seen_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'matched', 'manual', 1, ?, ?)`,
+        )
+        .run(
+          listId,
+          key,
+          item.titleId,
+          item.mediaType,
+          item.title,
+          item.year,
+          item.tmdbId,
+          (max.p ?? 0) + 1,
+          max.c !== null ? max.c + 1 : null,
+          stamp,
+          item.season ?? null,
+          item.season != null ? (item.episode ?? null) : null,
+          item.episodeTitle ?? null,
+          stamp,
+          stamp,
+        );
+      this.refreshCount(listId);
+      return Number(res.lastInsertRowid);
+    })();
+  }
+
+  removeItem(listId: number, itemId: number): boolean {
+    const n = this.db.prepare('DELETE FROM list_items WHERE id = ? AND list_id = ?').run(itemId, listId).changes;
+    if (n) this.refreshCount(listId);
+    return n > 0;
+  }
+
+  /**
+   * Saves the person's order. `itemIds` is the full order; entries left out (hidden or added
+   * meanwhile) follow afterwards in source order. Survives later syncs.
+   */
+  setOrder(listId: number, itemIds: number[]): number {
+    const own = new Set((this.db.prepare('SELECT id FROM list_items WHERE list_id = ?').all(listId) as { id: number }[]).map((r) => r.id));
+    const ids = [...new Set(itemIds)].filter((id) => own.has(id));
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE list_items SET custom_position = NULL WHERE list_id = ?').run(listId);
+      const set = this.db.prepare('UPDATE list_items SET custom_position = ? WHERE id = ?');
+      ids.forEach((id, i) => set.run(i + 1, id));
+      this.db.prepare('UPDATE lists SET updated_at = ? WHERE id = ?').run(nowIso(), listId);
+    })();
+    return ids.length;
+  }
+
+  resetOrder(listId: number): void {
+    this.db.prepare('UPDATE list_items SET custom_position = NULL WHERE list_id = ?').run(listId);
+  }
+
+  hasCustomOrder(listId: number): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM list_items WHERE list_id = ? AND custom_position IS NOT NULL LIMIT 1').get(listId));
   }
 
   /** Lists due for an automatic refresh. */

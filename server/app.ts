@@ -11,6 +11,7 @@ import { ApiError, ProviderError } from './http/errors.js';
 import { scrub } from './logger.js';
 import { registerAuth, SessionService } from './security/auth.js';
 import { UserService } from './services/users.js';
+import { QuickConnectStore } from './services/quickconnect.js';
 import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admin.js';
 import { integrationRoutes } from './routes/integrations.js';
@@ -18,12 +19,14 @@ import { sourceRoutes } from './routes/sources.js';
 import { catalogRoutes } from './routes/catalog.js';
 import { imageRoutes } from './routes/images.js';
 import { webhookRoutes } from './routes/webhooks.js';
+import { watchRoutes } from './routes/watch.js';
 
 export interface AppDeps {
   ctx: AppContext;
   users: UserService;
   sessions: SessionService;
   setupCode: () => string | null;
+  quickConnect: QuickConnectStore;
 }
 
 export async function buildApp(ctx: AppContext, opts: { setupCode: () => string | null; serveWeb?: boolean } ): Promise<FastifyInstance> {
@@ -92,7 +95,7 @@ export async function buildApp(ctx: AppContext, opts: { setupCode: () => string 
     return { status: 'ok', version: ctx.config.version };
   });
 
-  const deps: AppDeps = { ctx, users, sessions, setupCode: opts.setupCode };
+  const deps: AppDeps = { ctx, users, sessions, setupCode: opts.setupCode, quickConnect: new QuickConnectStore() };
   await app.register(async (api) => {
     await authRoutes(api, deps);
     await adminRoutes(api, deps);
@@ -101,6 +104,7 @@ export async function buildApp(ctx: AppContext, opts: { setupCode: () => string 
     await catalogRoutes(api, deps);
     await imageRoutes(api, deps);
     await webhookRoutes(api, deps);
+    await watchRoutes(api, deps);
   }, { prefix: '/api' });
 
   app.setNotFoundHandler((req, reply) => {

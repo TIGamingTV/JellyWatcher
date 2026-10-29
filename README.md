@@ -14,9 +14,12 @@ Runs as one Docker container with one data volume. Everything is configured in t
   - Trakt watchlist, your own lists, liked lists, and public list search.
   - Letterboxd and IMDb exports, and the Letterboxd RSS diary.
   - Each list keeps its order and syncs on its own.
-- **Timelines:** watch-order lists (e.g. a franchise in story order) are shown as a timeline with
-  every movie, show, season and episode in order, the film / show / season / episode counts, and the
-  total watch time counting down as you watch. Any list can be switched between timeline and grid.
+  - **Your own lists:** create a list, or duplicate any synced list into an editable copy, then add
+    movies, shows, single seasons or episodes through **Discover** (search, trending, popular).
+- **Timelines:** every list is shown as a timeline with each movie, show, season and episode in
+  order, the film / show / season / episode counts, and the total watch time counting down as you
+  watch. **Drag entries into your own order** (mouse, touch or keyboard); it survives syncs and can
+  be reset to the source order. Any list can be switched to a poster grid.
 - **Up Next:** the next unwatched entry of every list on Home, with a one-click request.
 - **Matching:** by TMDb and IMDb ids, with fuzzy title and year matching and a review queue for
   uncertain matches. Your match decisions are remembered.
@@ -29,23 +32,28 @@ Runs as one Docker container with one data volume. Everything is configured in t
 - **Lifecycle tracking:** On Watchlist → Requested → Processing → In Library → Watched. Each status
   comes from its authoritative service (Seerr for requests, Jellyfin for library and progress) and
   shows when it was synced. Out-of-date data is marked as such.
+- **Mark as watched:** mark movies, whole shows, single seasons or single episodes as watched, with
+  the date you watched them. Works with or without Jellyfin and is never overwritten by a sync.
 - **Watched stays watched:** viewing history is remembered, so deleting a watched title in Seerr,
   Sonarr or Radarr afterwards doesn't reset it.
 - **Library** from Jellyfin, for your linked account.
-- **Multi-user:**
-  - Local or Jellyfin sign-in.
+- **Multi-user, signed in with Jellyfin (like Seerr):**
+  - Set up with your Jellyfin administrator account; JellyWatcher creates its own Jellyfin API key.
+  - Everyone signs in with their Jellyfin account: password or **Quick Connect**.
+  - Import Jellyfin users in one click; local accounts remain as a fallback.
   - Private per-user lists and connections.
   - Admin-managed account links.
 - **Homelab-friendly:**
   - SQLite with automatic pre-upgrade backups and one-click backup download.
   - Health check, non-root read-only container, encrypted credentials, optional webhooks.
-- **Apple-inspired interface:** system type, light and dark appearance, responsive from phone to
-  desktop, keyboard and screen-reader friendly.
+- **Apple-inspired interface:** system type, light and dark appearance, built for iPhone, iPad and
+  desktop (safe areas, touch-sized controls, bottom sheets on phones), keyboard and screen-reader
+  friendly.
 
 ## Setup
 
 Requirements: Docker with Compose v2.24 or newer. Images for `linux/amd64` and `linux/arm64` are
-published to `ghcr.io/tigamingtv/jellywatcher` (tags: `latest`, `0.2.0`, `0.2`).
+published to `ghcr.io/tigamingtv/jellywatcher` (tags: `latest`, `0.3.0`, `0.3`).
 
 ### 1. Create `compose.yaml`
 
@@ -54,7 +62,7 @@ Create a folder (e.g. `jellywatcher/`) with this `compose.yaml`:
 ```yaml
 services:
   jellywatcher:
-    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.2.0
+    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.3.0
     container_name: jellywatcher
     restart: unless-stopped
     init: true
@@ -101,9 +109,11 @@ docker compose logs jellywatcher | grep "setup code"
 
 ### 3. Finish in the browser
 
-1. Open `http://<host>:8484`, enter the setup code, and create the administrator.
-2. Under **Integrations**, connect Jellyfin (URL + API key) and Seerr (URL + API key). TMDb and
-   Trakt are optional.
+1. Open `http://<host>:8484`, enter the setup code, choose **Set Up with Jellyfin**, enter your
+   Jellyfin server URL and sign in with a Jellyfin administrator account (password or Quick
+   Connect). JellyWatcher creates its own Jellyfin API key; nothing to copy. A local administrator is
+   available instead if you prefer.
+2. Under **Integrations**, connect Seerr (URL + API key). TMDb and Trakt are optional.
 3. Under **Watchlists › Add List**, paste a list link (IMDb or Trakt), connect Trakt, or upload
    Letterboxd / IMDb exports.
 
@@ -135,7 +145,7 @@ docker compose up -d --build
 | Letterboxd | Your export ZIP or CSV, plus your public RSS diary | Uploads: manual. RSS: automatic |
 | IMDb | Public lists by link (IMDb's public list API), or the CSV from IMDb's Export button | Links: automatic. Uploads: manual |
 | Seerr | REST API key, requests made as each linked user | Polling, plus an optional webhook |
-| Jellyfin | REST API key, plus per-user account linking | Polling, plus an optional webhook |
+| Jellyfin | REST API key (created during setup), Jellyfin sign-in with password or Quick Connect | Polling, plus an optional webhook |
 | TMDb | Optional; Seerr's TMDb access is used otherwise | — |
 
 Letterboxd doesn't offer an API for personal projects and its terms prohibit scraping, so
@@ -165,8 +175,8 @@ npm test         # unit and end-to-end tests (mocked Jellyfin, Seerr, Trakt, IMD
 npm run build
 ```
 
-Releases: set `version` in `package.json`, then push a matching tag (`git tag v0.2.0 && git push
-origin v0.2.0`). The [release workflow](.github/workflows/release.yml) tests, publishes the
+Releases: set `version` in `package.json`, then push a matching tag (`git tag v0.3.0 && git push
+origin v0.3.0`). The [release workflow](.github/workflows/release.yml) tests, publishes the
 multi-arch image to GHCR, and creates the GitHub release.
 
 ## Attribution

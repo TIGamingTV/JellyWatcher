@@ -198,13 +198,10 @@ describe('IMDb', () => {
 });
 
 describe('Lists', () => {
-  it('shows watch-order lists as timelines unless the person chose otherwise', () => {
-    expect(isTimeline({ display: 'auto', name: 'How to Train Your Dragon Timeline', description: null })).toBe(true);
-    expect(isTimeline({ display: 'auto', name: 'MCU in chronological order', description: null })).toBe(true);
-    expect(isTimeline({ display: 'auto', name: 'Star Wars', description: 'Machete watch order' })).toBe(true);
-    expect(isTimeline({ display: 'auto', name: 'Favourites', description: null })).toBe(false);
-    expect(isTimeline({ display: 'timeline', name: 'Favourites', description: null })).toBe(true);
-    expect(isTimeline({ display: 'grid', name: 'Dragon Timeline', description: null })).toBe(false);
+  it('shows every list as a timeline unless the person chose the grid', () => {
+    expect(isTimeline({ display: 'auto' })).toBe(true);
+    expect(isTimeline({ display: 'timeline' })).toBe(true);
+    expect(isTimeline({ display: 'grid' })).toBe(false);
   });
 });
 

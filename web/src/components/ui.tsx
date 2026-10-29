@@ -156,7 +156,11 @@ export function Sheet({ open, onClose, title, children, footer, wide }: { open: 
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
-    if (open && !d.open) d.showModal();
+    if (open && !d.open) {
+      d.showModal();
+      // Focus the main field on devices with a keyboard; on touch screens it would pop up the keyboard.
+      if (window.matchMedia('(pointer: fine)').matches) d.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+    }
     if (!open && d.open) d.close();
   }, [open]);
   return (
@@ -224,7 +228,7 @@ export function SyncButton({ busy, onClick, label = 'Refresh', disabled }: { bus
 }
 
 export function ProviderMark({ provider, size = 40 }: { provider: string; size?: number }) {
-  const letters: Record<string, string> = { trakt: 'T', letterboxd: 'Lb', imdb: 'IMDb', jellyfin: 'Jf', seerr: 'S', tmdb: 'TMDb' };
+  const letters: Record<string, string> = { trakt: 'T', letterboxd: 'Lb', imdb: 'IMDb', jellyfin: 'Jf', seerr: 'S', tmdb: 'TMDb', local: 'JW' };
   return (
     <span className={`provider-mark provider-${provider}`} style={{ width: size, height: size, fontSize: size < 32 ? 10 : provider === 'imdb' || provider === 'tmdb' ? 11 : 14 }} aria-hidden>
       {letters[provider] ?? provider.slice(0, 2)}

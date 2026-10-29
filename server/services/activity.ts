@@ -2,7 +2,9 @@ import { nowIso, type DB } from '../db/index.js';
 
 export type ActivityKind =
   | 'list_imported'
+  | 'list_created'
   | 'list_synced'
+  | 'marked_watched'
   | 'request_submitted'
   | 'request_approved'
   | 'request_declined'

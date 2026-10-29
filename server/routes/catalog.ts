@@ -13,13 +13,14 @@ import { buildTimelines } from '../services/timeline.js';
 import type { TitleRow } from '../services/titles.js';
 import { ensureTitleMetadata } from '../sync/metadata.js';
 import { triggerJob } from '../sync/scheduler.js';
+import { watchDetail } from './watch.js';
 import { ACTIVE_REQUEST_STATES, mapSeerrRequest, type LifecycleStage } from '../../shared/status.js';
 
 const CatalogQuery = z.object({
   listId: z.coerce.number().int().positive().optional(),
   q: z.string().trim().max(100).optional(),
   type: z.enum(['movie', 'tv']).optional(),
-  provider: z.enum(['trakt', 'letterboxd', 'imdb']).optional(),
+  provider: z.enum(['trakt', 'letterboxd', 'imdb', 'local']).optional(),
   genre: z.string().max(60).optional(),
   availability: z.enum(['in_library', 'not_in_library', 'unknown']).optional(),
   request: z.enum(['not_requested', 'active', 'available', 'declined', 'failed']).optional(),
@@ -54,7 +55,7 @@ export function catalog(ctx: AppContext, u: SessionUser, q: z.infer<typeof Catal
   }
   const rows = ctx.db
     .prepare(
-      `SELECT t.*, jf.jf_id, jf.jf_tag, MIN(li.position) AS pos, MAX(COALESCE(li.listed_at, li.first_seen_at)) AS added,
+      `SELECT t.*, jf.jf_id, jf.jf_tag, MIN(COALESCE(li.custom_position, 1000000 + COALESCE(li.position, 1000000))) AS pos, MAX(COALESCE(li.listed_at, li.first_seen_at)) AS added,
               GROUP_CONCAT(DISTINCT l.id) AS list_ids
          FROM list_items li JOIN lists l ON l.id = li.list_id JOIN titles t ON t.id = li.title_id ${JF_JOIN}
         WHERE ${where.join(' AND ')}
@@ -216,6 +217,7 @@ export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
         imdb: t.imdb_id ? `https://www.imdb.com/title/${t.imdb_id}/` : null,
       },
       jellyfin: jf ? { itemId: jf.id, addedAt: jf.date_created } : null,
+      watch: watchDetail(ctx, u, t, status),
     };
   });
 

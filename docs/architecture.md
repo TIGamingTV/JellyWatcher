@@ -86,11 +86,14 @@ merged.
 | --- | --- | --- |
 | List contents | The source | `applyItems` replaces a list atomically after a *complete* fetch. Vanished entries are removed. Identity changes reset the match. Applying the same fetch twice changes nothing. |
 | Library availability | Jellyfin | Removed items are deleted only after a complete successful pass. A failed sync keeps the last known index and marks it **stale**. |
-| Viewing progress | Jellyfin user data for the linked account | Never written back. Copied to `watch_history` / `watched_episodes` while a title is in the library; used once it is gone. Live data wins while present (marking unwatched in Jellyfin clears the history). |
+| Viewing progress | Jellyfin user data for the linked account, plus the person's own marks | Never written back. Copied to `watch_history` / `watched_episodes` while a title is in the library; used once it is gone. Live data wins while present (marking unwatched in Jellyfin clears the history). Manual marks (`manual_watches`: whole title, season or episode, with a date) are stored separately, only ever add "watched", and are never touched by a sync. |
+| List order | The source, unless the person reordered | Drag-and-drop order is stored in `list_items.custom_position` and survives syncs; new entries from the source follow afterwards. Resetting clears it. |
+| Local lists | JellyWatcher | `provider = 'local'`: created or duplicated in JellyWatcher, edited here, never synced. Duplicates copy every entry with its match. |
 | Requests | Seerr | Before a request is submitted, Seerr is checked live (`/movie|tv/{id}` as the user). Then duplicates (409), permissions, quota and blocklist (403), and missing seasons (202) are mapped to clear messages. |
 
-JellyWatcher is **read-only** towards every service except for creating Seerr requests. This avoids
-loops of conflicting state.
+JellyWatcher is **read-only** towards every service except for creating Seerr requests (and, once
+during the guided setup, creating its own Jellyfin API key with the administrator's session). This
+avoids loops of conflicting state.
 
 Each status shown in the UI carries `syncedAt`, `source` and `stale`. Stale means not synced
 within 3× the interval, or the last sync failed. The UI says "Possibly outdated" instead of

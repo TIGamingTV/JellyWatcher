@@ -248,7 +248,8 @@ function Users() {
   const toast = useToast();
   const qc = useQueryClient();
   const users = useQuery({ queryKey: ['admin-users'], queryFn: () => get<{ users: UserRow[] }>('/admin/users') });
-  const jfUsers = useQuery({ queryKey: ['jf-users'], queryFn: () => get<{ users: { id: string; name: string; isAdmin: boolean; disabled: boolean }[] }>('/admin/jellyfin-users'), enabled: services.jellyfin });
+  const jfUsers = useQuery({ queryKey: ['jf-users'], queryFn: () => get<{ users: JfUser[] }>('/admin/jellyfin-users'), enabled: services.jellyfin });
+  const [importing, setImporting] = useState(false);
   const seerrUsers = useQuery({ queryKey: ['seerr-users'], queryFn: () => get<{ users: { id: number; name: string; jellyfinUserId: string | null }[] }>('/admin/seerr-users'), enabled: services.seerr });
   const settings = useQuery({ queryKey: ['admin-settings'], queryFn: () => get<{ settings: Record<string, number | boolean> }>('/admin/settings') });
   const [creating, setCreating] = useState(false);
@@ -293,6 +294,11 @@ function Users() {
               }}
             >
               Match Seerr Users
+            </button>
+          )}
+          {services.jellyfin && (
+            <button className="btn btn-small btn-gray" onClick={() => setImporting(true)}>
+              Import from Jellyfin
             </button>
           )}
           <button className="btn btn-small btn-primary" onClick={() => setCreating(true)}>
@@ -376,13 +382,13 @@ function Users() {
             <div className="row">
               <div className="row-main">
                 <div className="row-title">Allow Jellyfin sign-in</div>
-                <div className="row-sub">People can sign in with their Jellyfin username and password.</div>
+                <div className="row-sub">People sign in with their Jellyfin username and password, or with Quick Connect when it is turned on in Jellyfin.</div>
               </div>
               <Toggle checked={Boolean(settings.data.settings['auth.jellyfinLogin'])} onChange={(v) => setSetting('auth.jellyfinLogin', v)} label="Allow Jellyfin sign-in" />
             </div>
             <div className="row">
               <div className="row-main">
-                <div className="row-title">Create accounts automatically</div>
+                <div className="row-title">Let everyone on the Jellyfin server sign in</div>
                 <div className="row-sub">Anyone with a Jellyfin account on your server gets a member account on first sign-in. Off: only people you add can sign in.</div>
               </div>
               <Toggle checked={Boolean(settings.data.settings['auth.jellyfinAutoCreate'])} disabled={!settings.data.settings['auth.jellyfinLogin']} onChange={(v) => setSetting('auth.jellyfinAutoCreate', v)} label="Create accounts automatically" />
@@ -391,6 +397,16 @@ function Users() {
         </section>
       )}
       {creating && <CreateUserSheet jfUsers={jfUsers.data?.users ?? []} onClose={() => setCreating(false)} />}
+      {importing && (
+        <ImportJellyfinSheet
+          users={jfUsers.data?.users ?? []}
+          onClose={() => setImporting(false)}
+          onDone={() => {
+            void users.refetch();
+            void jfUsers.refetch();
+          }}
+        />
+      )}
       <ConfirmSheet
         open={Boolean(deleting)}
         onClose={() => setDeleting(null)}
@@ -409,6 +425,84 @@ function Users() {
         }}
       />
     </div>
+  );
+}
+
+interface JfUser {
+  id: string;
+  name: string;
+  isAdmin: boolean;
+  disabled: boolean;
+  linked: boolean;
+}
+
+/** Creates member accounts for Jellyfin users in one go, like Seerr's “Import Jellyfin Users”. */
+function ImportJellyfinSheet({ users, onClose, onDone }: { users: JfUser[]; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const available = users.filter((u) => !u.linked && !u.disabled);
+  const [chosen, setChosen] = useState<Set<string>>(new Set(available.map((u) => u.id)));
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await post<{ created: number }>('/admin/users/import-jellyfin', { ids: [...chosen] });
+      toast('success', r.created ? `Imported ${r.created} ${r.created === 1 ? 'person' : 'people'}.` : 'Nobody new to import.');
+      onDone();
+      onClose();
+    } catch (err) {
+      toast('error', errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      title="Import from Jellyfin"
+      footer={
+        <>
+          <button className="btn btn-gray" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={run} disabled={busy || chosen.size === 0}>
+            {busy && <Spinner />}
+            Import {chosen.size || ''}
+          </button>
+        </>
+      }
+    >
+      <div className="stack">
+        <p className="secondary subhead" style={{ margin: 0 }}>
+          Each person gets a member account that signs in with their Jellyfin password or Quick Connect. Their watch progress syncs automatically.
+        </p>
+        {available.length === 0 ? (
+          <Banner kind="info">Every Jellyfin user already has an account.</Banner>
+        ) : (
+          <div className="group" style={{ background: 'var(--surface-2)' }}>
+            {available.map((u) => (
+              <label key={u.id} className="row" style={{ cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={chosen.has(u.id)}
+                  onChange={(e) => {
+                    const next = new Set(chosen);
+                    if (e.target.checked) next.add(u.id);
+                    else next.delete(u.id);
+                    setChosen(next);
+                  }}
+                  style={{ width: 18, height: 18, accentColor: 'var(--accent-fill)' }}
+                />
+                <div className="row-main">
+                  <div className="row-title">{u.name}</div>
+                  {u.isAdmin && <div className="row-sub">Jellyfin administrator (imported as a member)</div>}
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </Sheet>
   );
 }
 

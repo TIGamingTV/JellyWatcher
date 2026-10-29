@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, Check, Circle, ListVideo, Play, Plus, Sparkles } from 'lucide-react';
@@ -9,6 +10,7 @@ import { Banner, CenterLoading, ErrorState, PageHeader, Time } from '../componen
 import { PosterImage, Shelf } from '../components/Poster';
 import { StagePill } from '../components/status';
 import { entryFacts, entryHeading } from '../components/Timeline';
+import { QuickWatchSheet } from '../components/Watched';
 
 interface HomeData {
   counts: { watchlist: number; review: number; lists: number };
@@ -193,6 +195,7 @@ function UpNextCard({ item }: { item: UpNextItem }) {
   const facts = entryFacts(e);
   const seasonParam = e.season !== null && e.season > 0 ? `&season=${e.season}` : '';
   const others = item.lists.length - 1;
+  const [marking, setMarking] = useState(false);
   return (
     <article className="up-card" aria-label={`${title}${part ? `, ${part}` : ''}, next on ${item.list.name}`}>
       <Link to={`/titles/${t.id}`} className="poster-frame" tabIndex={-1} aria-hidden>
@@ -228,8 +231,21 @@ function UpNextCard({ item }: { item: UpNextItem }) {
           ) : (
             <StagePill stage={e.stage} />
           )}
+          <button className="btn btn-small btn-gray" onClick={() => setMarking(true)} aria-label={`Mark ${title}${part ? ` ${part}` : ''} as watched`} aria-haspopup="dialog">
+            <Check size={13} aria-hidden /> Watched
+          </button>
         </div>
       </div>
+      {marking && (
+        <QuickWatchSheet
+          titleId={t.id}
+          heading={[title, part].filter(Boolean).join(' · ')}
+          scope={e.kind === 'season' ? { season: e.season } : e.kind === 'episode' ? { season: e.season, episode: e.episode } : {}}
+          manualAt={e.manualAt}
+          watched={e.state === 'watched'}
+          onClose={() => setMarking(false)}
+        />
+      )}
     </article>
   );
 }

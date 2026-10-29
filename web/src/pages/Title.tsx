@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ExternalLink, Play, Plus, RefreshCw, Star } from 'lucide-react';
+import { CheckCheck, ChevronLeft, Eye, ExternalLink, ListPlus, Play, Plus, RefreshCw, Star } from 'lucide-react';
 import { REQUEST_STATE_LABEL, type LifecycleStage } from '../../../shared/status';
 import { errorText, get, post } from '../lib/api';
 import { useToast, useUser } from '../lib/session';
@@ -11,6 +11,8 @@ import { Banner, CenterLoading, ErrorState, Sheet, Spinner, Time } from '../comp
 import { PosterImage } from '../components/Poster';
 import { RequestPill, StagePill, availabilityLabel, viewingLabel } from '../components/status';
 import { mapSeerrRequest } from '../../../shared/status';
+import { WatchedSheet } from '../components/Watched';
+import { AddToListSheet } from '../components/LocalLists';
 
 const TRACK = ['On Watchlist', 'Requested', 'Processing', 'In Library', 'Watched'] as const;
 
@@ -73,6 +75,8 @@ export function TitlePage() {
     setRequesting(false);
     if (params.has('request')) setParams({}, { replace: true });
   };
+  const [marking, setMarking] = useState(false);
+  const [adding, setAdding] = useState(false);
   const q = useQuery({ queryKey: ['title', id], queryFn: () => get<TitleDetail>(`/titles/${id}`) });
   const d = q.data;
   useEffect(() => {
@@ -125,6 +129,13 @@ export function TitlePage() {
                   <Plus size={16} aria-hidden /> {tvMore ? 'Request More Seasons' : req === 'declined' || req === 'failed' ? 'Request Again' : 'Request'}
                 </button>
               )}
+              <button className="btn btn-large" onClick={() => setMarking(true)} aria-haspopup="dialog">
+                {s.viewing.state === 'watched' ? <CheckCheck size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
+                {s.viewing.state === 'watched' ? 'Watched' : t.mediaType === 'tv' ? 'Mark Watched…' : 'Mark as Watched'}
+              </button>
+              <button className="btn btn-large" onClick={() => setAdding(true)} aria-haspopup="dialog">
+                <ListPlus size={16} aria-hidden /> Add to List
+              </button>
               {d.links.seerr && (
                 <a className="btn btn-large" href={d.links.seerr} target="_blank" rel="noreferrer noopener">
                   Seerr <ExternalLink size={14} aria-hidden />
@@ -175,7 +186,7 @@ export function TitlePage() {
                 )}
                 {s.viewing.progress.lastPlayedAt && (
                   <div className="meta">
-                    Last played <Time iso={s.viewing.progress.lastPlayedAt} />
+                    {s.viewing.state === 'watched' && d.watch.manualAt ? `Watched on ${date(d.watch.manualAt)}` : <>Last played <Time iso={s.viewing.progress.lastPlayedAt} /></>}
                   </div>
                 )}
               </>
@@ -183,8 +194,11 @@ export function TitlePage() {
             {s.viewing.detail && (
               <div className="meta">
                 {s.viewing.detail}{' '}
-                {!user.jellyfin && (
-                  <Link to="/integrations/jellyfin">Link account</Link>
+                {!user.jellyfin && s.viewing.state === 'unavailable' && <Link to="/integrations/jellyfin">Link account</Link>}{' '}
+                {s.viewing.state !== 'watched' && (
+                  <button className="btn-link" onClick={() => setMarking(true)}>
+                    Mark as watched
+                  </button>
                 )}
               </div>
             )}
@@ -204,7 +218,7 @@ export function TitlePage() {
             </div>
           ) : (
             <div className="group">
-              {d.lists.map((l) => (
+              {d.lists.filter((l, i, all) => all.findIndex((x) => x.id === l.id) === i).map((l) => (
                 <Link key={l.itemId} to={`/watchlists/lists/${l.id}`} className="row row-link">
                   <div className="row-main">
                     <div className="row-title">{l.name}</div>
@@ -263,6 +277,8 @@ export function TitlePage() {
         </section>
       </div>
 
+      {marking && <WatchedSheet titleId={t.id} title={t.title} mediaType={t.mediaType} watch={d.watch} onClose={() => setMarking(false)} />}
+      {adding && <AddToListSheet title={{ id: t.id, tmdbId: t.tmdbId, mediaType: t.mediaType, title: t.title, year: t.year }} onClose={() => setAdding(false)} />}
       {requesting && <RequestSheet titleId={id} title={t.title} mediaType={t.mediaType} preset={presetSeason !== null && presetSeason > 0 ? [presetSeason] : null} onClose={closeRequest} />}
     </>
   );

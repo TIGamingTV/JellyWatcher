@@ -11,6 +11,7 @@ import { requireAdmin, requireUser } from '../security/auth.js';
 import { SettingsSchema } from '../services/settings.js';
 import { triggerJob } from '../sync/scheduler.js';
 import { syncSeerrUsers } from '../sync/seerr.js';
+import { usernameFromJellyfin } from './auth.js';
 
 export async function adminRoutes(app: FastifyInstance, { ctx, users, sessions }: AppDeps) {
   app.get('/admin/users', async (req) => {
@@ -100,7 +101,33 @@ export async function adminRoutes(app: FastifyInstance, { ctx, users, sessions }
     const jf = ctx.integrations.jellyfin();
     if (!jf) throw new ApiError(400, 'jellyfin_not_configured', 'Connect Jellyfin first.');
     const list = await jf.users();
-    return { users: list.map((u) => ({ id: u.Id, name: u.Name, isAdmin: u.Policy?.IsAdministrator ?? false, disabled: u.Policy?.IsDisabled ?? false })) };
+    return {
+      users: list.map((u) => ({ id: u.Id, name: u.Name, isAdmin: u.Policy?.IsAdministrator ?? false, disabled: u.Policy?.IsDisabled ?? false, linked: Boolean(users.byJellyfinId(u.Id)) })),
+    };
+  });
+
+  /** Creates member accounts for Jellyfin users (like Seerr's "Import Jellyfin Users"). */
+  app.post('/admin/users/import-jellyfin', async (req) => {
+    requireAdmin(req);
+    const body = parse(z.object({ ids: z.array(z.string().min(1).max(64)).min(1).max(500) }), req.body);
+    const jf = ctx.integrations.jellyfin();
+    if (!jf) throw new ApiError(400, 'jellyfin_not_configured', 'Connect Jellyfin first.');
+    const all = new Map((await jf.users()).map((u) => [u.Id, u]));
+    let created = 0;
+    for (const id of new Set(body.ids)) {
+      const j = all.get(id);
+      if (!j || users.byJellyfinId(j.Id)) continue;
+      let username = usernameFromJellyfin(j.Name, j.Id);
+      if (users.byUsername(username)) username = `${username.slice(0, 60)}-jf`;
+      if (users.byUsername(username)) continue;
+      await users.create({ username, displayName: j.Name, role: 'user', authSource: 'jellyfin', jellyfinUserId: j.Id, jellyfinUsername: j.Name });
+      created++;
+    }
+    if (created) {
+      void syncSeerrUsers(ctx).catch(() => undefined);
+      void triggerJob(ctx, 'jellyfin', 'event');
+    }
+    return { created };
   });
 
   app.get('/admin/seerr-users', async (req) => {

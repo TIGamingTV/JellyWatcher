@@ -21,6 +21,11 @@ export interface MockState {
   /** Jellyfin item ids hidden from the library (simulates deleting after watching). */
   jellyfinRemoved: Set<string>;
   logouts: number;
+  /** Quick Connect: whether the pending request was approved in a Jellyfin app. */
+  quickConnectEnabled: boolean;
+  quickConnectApproved: boolean;
+  /** API keys created through /Auth/Keys (the guided setup). */
+  apiKeys: { AccessToken: string; AppName: string; DateCreated: string }[];
 }
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -36,7 +41,11 @@ export function createMocks() {
     imdbCalls: [],
     jellyfinRemoved: new Set(),
     logouts: 0,
+    quickConnectEnabled: true,
+    quickConnectApproved: false,
+    apiKeys: [],
   };
+  const QC_SECRET = 'qc-secret-0001';
 
   const jellyfinItems = [
     { Id: HEAT_JF, Name: 'Heat', ServerId: 'srv1', Type: 'Movie', ProductionYear: 1995, ProviderIds: { Tmdb: '949', Imdb: 'tt0113277' }, ImageTags: { Primary: 'p1' }, DateCreated: '2026-10-01T00:00:00Z', RunTimeTicks: 170 * 600_000_000 },
@@ -119,8 +128,31 @@ export function createMocks() {
         case '/Users':
           return authed ? json([{ Id: ALICE_JF, Name: 'alice', Policy: { IsAdministrator: true } }, { Id: BOB_JF, Name: 'bob', Policy: {} }]) : new Response('', { status: 401 });
         case '/Users/AuthenticateByName':
-          if (body?.Username === 'alice' && body?.Pw === 'alicepw') return json({ AccessToken: 'session-token', User: { Id: ALICE_JF, Name: 'alice' }, ServerId: 'srv1' });
+          if (body?.Username === 'alice' && body?.Pw === 'alicepw') return json({ AccessToken: 'session-token', User: { Id: ALICE_JF, Name: 'alice', Policy: { IsAdministrator: true } }, ServerId: 'srv1' });
+          if (body?.Username === 'bob' && body?.Pw === 'bobpw') return json({ AccessToken: 'bob-session', User: { Id: BOB_JF, Name: 'bob', Policy: { IsAdministrator: false } }, ServerId: 'srv1' });
           return new Response('', { status: 401 });
+        case '/QuickConnect/Enabled':
+          return json(state.quickConnectEnabled);
+        case '/QuickConnect/Initiate':
+          if (method !== 'POST') return new Response('', { status: 405 });
+          if (!state.quickConnectEnabled) return new Response('Quick connect is disabled', { status: 401 });
+          if (!auth.includes('DeviceId=')) return new Response('', { status: 400 });
+          state.quickConnectApproved = false;
+          return json({ Authenticated: false, Secret: QC_SECRET, Code: '246810', DeviceId: 'x', DateAdded: new Date().toISOString() });
+        case '/QuickConnect/Connect':
+          if (url.searchParams.get('secret') !== QC_SECRET) return new Response('', { status: 404 });
+          return json({ Authenticated: state.quickConnectApproved, Secret: QC_SECRET, Code: '246810' });
+        case '/Users/AuthenticateWithQuickConnect':
+          if (body?.Secret !== QC_SECRET || !state.quickConnectApproved) return new Response('', { status: 400 });
+          return json({ AccessToken: 'qc-token', User: { Id: ALICE_JF, Name: 'alice', Policy: { IsAdministrator: true } }, ServerId: 'srv1' });
+        case '/Auth/Keys': {
+          if (!auth.includes('Token="session-token"') && !auth.includes('Token="qc-token"')) return new Response('', { status: 401 });
+          if (method === 'POST') {
+            state.apiKeys.push({ AccessToken: JF.key, AppName: url.searchParams.get('app') ?? '', DateCreated: new Date().toISOString() });
+            return new Response(null, { status: 204 });
+          }
+          return json({ Items: state.apiKeys, TotalRecordCount: state.apiKeys.length, StartIndex: 0 });
+        }
         case '/Sessions/Logout':
           state.logouts++;
           return new Response(null, { status: 204 });
@@ -195,7 +227,16 @@ export function createMocks() {
         const d = seerrDetails(det[1]!, Number(det[2]));
         return d ? json(d) : json({ message: 'not found' }, 404);
       }
-      if (p === '/discover/trending') return json({ results: [] });
+      if (p === '/discover/trending' || p === '/discover/movies') {
+        return json({
+          page: 1,
+          totalPages: 1,
+          results: [
+            { id: 11524, mediaType: 'movie', title: 'Thief', releaseDate: '1981-03-27', posterPath: '/thief.jpg' },
+            { id: 95396, mediaType: 'tv', name: 'Severance', firstAirDate: '2022-02-18', posterPath: '/sev.jpg' },
+          ],
+        });
+      }
       return json({ message: 'not found' }, 404);
     }
 
