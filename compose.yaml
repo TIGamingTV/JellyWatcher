@@ -9,7 +9,7 @@
 
 services:
   jellywatcher:
-    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.2.0
+    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.3.0
     # To build from source instead (inside a clone of the repository), replace `image:` with:
     # build: .
     container_name: jellywatcher
