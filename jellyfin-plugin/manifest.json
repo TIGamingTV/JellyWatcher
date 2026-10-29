@@ -7,6 +7,15 @@
     "owner": "TIGamingTV",
     "category": "General",
     "imageUrl": "https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/assets/jellyfin-plugin.png",
-    "versions": []
+    "versions": [
+      {
+        "version": "0.5.0.0",
+        "changelog": "JellyWatcher 0.5.0: https://github.com/TIGamingTV/JellyWatcher/releases/tag/v0.5.0",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/TIGamingTV/JellyWatcher/releases/download/v0.5.0/jellywatcher_0.5.0.0.zip",
+        "checksum": "baeff0ea61df6ba80f571761783c2201",
+        "timestamp": "2026-10-29T18:50:25Z"
+      }
+    ]
   }
 ]
