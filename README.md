@@ -53,7 +53,7 @@ Runs as one Docker container with one data volume. Everything is configured in t
 ## Setup
 
 Requirements: Docker with Compose v2.24 or newer. Images for `linux/amd64` and `linux/arm64` are
-published to `ghcr.io/tigamingtv/jellywatcher` (tags: `latest`, `0.3.0`, `0.3`).
+published to `ghcr.io/tigamingtv/jellywatcher` (tags: `latest`, `0.3.1`, `0.3`).
 
 ### 1. Create `compose.yaml`
 
@@ -62,7 +62,7 @@ Create a folder (e.g. `jellywatcher/`) with this `compose.yaml`:
 ```yaml
 services:
   jellywatcher:
-    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.3.0
+    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.3.1
     container_name: jellywatcher
     restart: unless-stopped
     init: true
