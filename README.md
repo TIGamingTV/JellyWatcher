@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/jellyfin-plugin.png" alt="JellyWatchParty" width="400">
+</p>
+
 # JellyWatcher
 
 **All your watchlists in one place, next to your Jellyfin library.**
