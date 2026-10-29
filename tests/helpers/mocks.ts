@@ -10,6 +10,7 @@ export const BOB_JF = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
 export const HEAT_JF = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3';
 export const SEV_JF = 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4';
 export const IMDB_LIST = 'ls020816781';
+export const IMDB_HEADER_LIST = 'ls020816782';
 
 export interface MockState {
   jellyfinDown: boolean;
@@ -18,6 +19,9 @@ export interface MockState {
   seerrCalls: { method: string; path: string; apiUser: string | null; body?: unknown }[];
   traktCalls: string[];
   imdbCalls: { id: string; after: string | null }[];
+  /** Ids asked for in IMDb title lookups. */
+  imdbTitleCalls: string[][];
+  imdbDown: boolean;
   letterboxdCalls: string[];
   /** Jellyfin item ids hidden from the library (simulates deleting after watching). */
   jellyfinRemoved: Set<string>;
@@ -40,6 +44,8 @@ export function createMocks() {
     seerrCalls: [],
     traktCalls: [],
     imdbCalls: [],
+    imdbTitleCalls: [],
+    imdbDown: false,
     letterboxdCalls: [],
     jellyfinRemoved: new Set(),
     logouts: 0,
@@ -270,7 +276,43 @@ export function createMocks() {
     if (url.origin === 'https://api.graphql.imdb.com') {
       if (!headers.get('x-imdb-client-name')) return new Response('<html>403 Forbidden</html>', { status: 403 });
       const vars = body?.variables ?? {};
+      const sev = (id: string, text: string, episode: number) => ({
+        id,
+        titleText: { text },
+        titleType: { id: 'tvEpisode' },
+        runtime: { seconds: 3420 },
+        series: { series: { id: 'tt11280740', titleText: { text: 'Severance' }, releaseYear: { year: 2022 } }, episodeNumber: { seasonNumber: 1, episodeNumber: episode } },
+      });
+      // Title lookups by id (episodes from CSV exports).
+      if (typeof body?.query === 'string' && body.query.includes('titles(ids:')) {
+        state.imdbTitleCalls.push(vars.ids);
+        if (state.imdbDown) return new Response('', { status: 503 });
+        const known: Record<string, unknown> = { tt11650328: sev('tt11650328', 'Good News About Hell', 1), tt11650330: sev('tt11650330', 'Half Loop', 2) };
+        return json({ data: { titles: (vars.ids as string[]).map((id) => known[id] ?? null) } });
+      }
       state.imdbCalls.push({ id: vars.id, after: vars.after ?? null });
+      if (vars.id === IMDB_HEADER_LIST) {
+        // A watch-order list: the show as a section title, then its episodes around a movie.
+        const node = (listItem: unknown) => ({ node: { createdDate: '2026-01-01T00:00:00Z', description: null, listItem } });
+        const edges = [
+          node({ id: 'tt11280740', titleText: { text: 'Severance' }, releaseYear: { year: 2022 }, titleType: { id: 'tvSeries' }, runtime: { seconds: 3000 }, episodes: { episodes: { total: 19 }, displayableSeasons: { total: 2 } }, series: null }),
+          node(sev('tt11650328', 'Good News About Hell', 1)),
+          node({ id: 'tt0113277', titleText: { text: 'Heat' }, releaseYear: { year: 1995 }, titleType: { id: 'movie' }, runtime: { seconds: 10200 }, episodes: null, series: null }),
+          node(sev('tt11650330', 'Half Loop', 2)),
+        ];
+        return json({
+          data: {
+            list: {
+              id: IMDB_HEADER_LIST,
+              name: { originalText: 'Severance Order' },
+              description: null,
+              author: { username: { text: 'someone' } },
+              visibility: { id: 'PUBLIC' },
+              items: { total: edges.length, pageInfo: { hasNextPage: false, endCursor: null }, edges },
+            },
+          },
+        });
+      }
       if (vars.id === 'ls000000001') return json({ errors: [{ message: 'Permission denied', extensions: { code: 'FORBIDDEN' } }], data: { list: null } });
       if (vars.id !== IMDB_LIST) return json({ errors: [{ message: 'Not found', extensions: { code: 'RESOURCE_NOT_FOUND' } }], data: { list: null } });
       const t = (id: string, text: string, year: number, type: string, minutes: number, extra: Record<string, unknown> = {}) => ({

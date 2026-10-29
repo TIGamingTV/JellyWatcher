@@ -106,6 +106,15 @@ describe('id-based sources', () => {
     // Without a status column everything is one list.
     expect(parseIdCsv('tmdb_id,media_type\n949,movie\n', { source: 'TMDb', fallbackName: 'Mann' }).map((l) => [l.info.name, l.items.length])).toEqual([['Mann', 1]]);
   });
+
+  it('keeps episodes with an IMDb id for lookup and never matches the others by their title', () => {
+    const [list] = parseIdCsv(['title,type,imdb_id,tmdb_id', 'Pilot,episode,tt0959621,', 'Pilot,tvEpisode,,62085', 'Heat,movie,tt0113277,949'].join('\n'), { source: 'MDBList', fallbackName: 'Mixed' });
+    expect(list!.items.map((i) => [i.title, i.mediaType, i.episodeImdbId ?? null])).toEqual([
+      ['Pilot', 'tv', 'tt0959621'],
+      ['Heat', 'movie', null],
+    ]);
+    expect(list!.skipped).toBe(1);
+  });
 });
 
 describe('anime', () => {

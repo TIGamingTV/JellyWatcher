@@ -26,9 +26,10 @@ export function normalizeStatus(raw: string | null | undefined): WatchStatus | n
   return null;
 }
 
-export function mediaTypeOf(raw: string | null | undefined): MediaType | 'anime' | null {
+export function mediaTypeOf(raw: string | null | undefined): MediaType | 'anime' | 'episode' | null {
   const t = (raw ?? '').toLowerCase().replace(/[\s_-]+/g, '');
   if (['movie', 'movies', 'film', 'films', 'feature'].includes(t)) return 'movie';
+  if (['episode', 'episodes', 'tvepisode'].includes(t)) return 'episode';
   if (['tv', 'show', 'shows', 'series', 'tvshow', 'tvseries', 'tvshows', 'miniseries'].includes(t)) return 'tv';
   if (t === 'anime') return 'anime';
   return null;
@@ -101,7 +102,23 @@ export function parseIdCsv(text: string, opts: GenericOptions): ListFetchResult[
       listedAt: cell(iAdded) || null,
     };
     let item: SourceItem | null;
-    if (kind === 'anime' || ((mal || anilist) && !tmdbId && !imdbId)) {
+    if (kind === 'episode') {
+      // An episode's own ids say nothing about its show. With an IMDb id the show and numbers are
+      // looked up before saving; without one it is skipped (matching it by name would find movies).
+      item = imdbId
+        ? {
+            sourceKey: `imdb:${imdbId}`,
+            title: title || imdbId,
+            year,
+            mediaType: 'tv',
+            imdbId,
+            episodeImdbId: imdbId,
+            sourceUrl: `https://www.imdb.com/title/${imdbId}/`,
+            position,
+            ...common,
+          }
+        : null;
+    } else if (kind === 'anime' || ((mal || anilist) && !tmdbId && !imdbId)) {
       item = animeItem(
         {
           key: mal ? `mal:${mal}` : anilist ? `anilist:${anilist}` : simkl ? `simkl:${simkl}` : `t:${title.toLowerCase()}|${year ?? ''}`,

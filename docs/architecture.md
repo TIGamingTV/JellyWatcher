@@ -45,7 +45,9 @@ response validation (zod, tolerant of missing fields) and quirks:
 Seerr's TMDb proxy, so a TMDb key is optional.
 
 `services/timeline.ts` turns a list into ordered entries (movie, show, season or episode), each with
-its episode count, runtime and watched share, plus list totals. Runtimes come from metadata, then the
+its episode count, runtime and watched share, plus list totals. A show entry followed later by
+seasons or episodes of the same show becomes a *header* (`header: true`): it has no size or watch time,
+is never Up Next, and is left out of Jellyfin mirrors. Runtimes come from metadata, then the
 source, then Jellyfin. It feeds timeline views and Home's *Up Next* (the first unwatched entry of
 each list that isn't marked *Not Watching*). It also sorts lists automatically (release date, newest
 first, title, runtime); the result is saved as the person's order.

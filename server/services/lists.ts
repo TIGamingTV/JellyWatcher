@@ -173,7 +173,8 @@ export class ListService {
 
     const tx = this.db.transaction((items: SourceItem[]) => {
       for (const item of items) {
-        if (seen.has(item.sourceKey)) continue;
+        // Episodes whose show was not looked up cannot be placed; never save them half-known.
+        if (item.episodeImdbId || seen.has(item.sourceKey)) continue;
         seen.add(item.sourceKey);
         const params = {
           listId,

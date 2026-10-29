@@ -25,6 +25,11 @@ export interface SourceItem {
   /** Size of a whole-series entry (or of a season entry) as reported by the source. */
   episodes?: number | null;
   seasons?: number | null;
+  /**
+   * An episode known only by its own IMDb id (CSV exports). Its show and numbers are looked up by
+   * resolveEpisodeItems before the list is saved; such items are never saved unresolved.
+   */
+  episodeImdbId?: string | null;
 }
 
 export type ListKind = 'watchlist' | 'owned' | 'liked' | 'public' | 'upload' | 'diary' | 'local';
@@ -146,7 +151,7 @@ export const SOURCE_DESCRIPTORS: SourceDescriptor[] = [
     limitations: [
       'Links work for public lists (imdb.com/list/ls…). They sync automatically, keep the list order, and include episodes.',
       'Watchlists are private on IMDb unless shared, so import them from a CSV export instead.',
-      'Uploaded files update only when you upload a new export, and their episodes are skipped (the CSV has no show information).',
+      'Uploaded files update only when you upload a new export. Their episodes are looked up on IMDb to find their show.',
       'IMDb data is for personal, non-commercial use.',
     ],
   },

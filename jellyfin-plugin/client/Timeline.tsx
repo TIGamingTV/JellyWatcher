@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { entryRequestable, REQUEST_STATE_LABEL, STAGE_LABEL } from '../../shared/status';
 import { date, duration, plural } from '../../web/src/lib/format';
-import { entryFacts, entryHeading, scopeOf } from '../../web/src/lib/timeline';
+import { entryFacts, entryHeading, nextEntryIndex, scopeOf } from '../../web/src/lib/timeline';
 import { MIRROR_HINT, MIRROR_INTRO, MIRROR_OPTIONS, mirrorStatus } from '../../web/src/lib/mirror';
 import type { Eligibility, JellyfinMirrorMode, ListView, Timeline, TimelineEntry } from '../../web/src/lib/types';
 import { api, errorText, imageUrl } from './api';
@@ -54,7 +54,7 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
     return () => window.clearTimeout(t);
   }, [busy, mirrorPending, list]);
 
-  const nextIndex = entries.findIndex((e) => e.matched && e.state !== 'watched' && !e.skipped);
+  const nextIndex = nextEntryIndex(entries);
 
   // Bring Up Next into view the first time the list opens.
   useEffect(() => {
@@ -172,7 +172,7 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
         <div class="jw-stats">
           <Stat n={s.entries.toLocaleString()} label={s.entries === 1 ? 'Entry' : 'Entries'} />
           {s.films > 0 && <Stat n={s.films.toLocaleString()} label={s.films === 1 ? 'Film' : 'Films'} />}
-          {s.shows + s.seasons > 0 && <Stat n={s.episodes.toLocaleString()} label={s.episodes === 1 ? 'Episode' : 'Episodes'} />}
+          {s.episodes > 0 && <Stat n={s.episodes.toLocaleString()} label={s.episodes === 1 ? 'Episode' : 'Episodes'} />}
           <Stat n={s.totalMinutes > 0 ? duration(s.totalMinutes) : '—'} label="Watch Time" />
           <Stat n={done ? 'Done' : s.totalMinutes > 0 ? duration(s.remainingMinutes) : '—'} label="Left to Watch" accent={done} />
         </div>
@@ -337,14 +337,28 @@ function Row({ e, next, busy, canRequest, reviewUrl, onSkip, onWatch, onRequest 
   const { title, part } = entryHeading(e);
   const facts = entryFacts(e);
   const name = heading(e);
-  const kicker = e.skipped ? 'Not Watching' : next ? 'Up Next' : e.state === 'watched' ? (e.watchedAt ? `Watched ${date(e.watchedAt)}` : 'Watched') : e.state === 'in_progress' ? 'Watching' : null;
-  const progress = e.state === 'in_progress' && e.episodes ? `${e.watchedEpisodes ?? 0} of ${plural(e.episodes, 'episode')}` : e.state === 'in_progress' ? `${e.percent}% watched` : null;
+  const kicker = e.header
+    ? e.state === 'watched'
+      ? 'Watched'
+      : null
+    : e.skipped
+      ? 'Not Watching'
+      : next
+        ? 'Up Next'
+        : e.state === 'watched'
+          ? e.watchedAt
+            ? `Watched ${date(e.watchedAt)}`
+            : 'Watched'
+          : e.state === 'in_progress'
+            ? 'Watching'
+            : null;
+  const progress = e.header ? null : e.state === 'in_progress' && e.episodes ? `${e.watchedEpisodes ?? 0} of ${plural(e.episodes, 'episode')}` : e.state === 'in_progress' ? `${e.percent}% watched` : null;
   const playable = e.jellyfinItemId && PLAYABLE.has(e.availability);
-  const showStage = e.matched && e.state !== 'watched' && !e.skipped && !(canRequest && e.stage === 'listed');
+  const showStage = !e.header && e.matched && e.state !== 'watched' && !e.skipped && !(canRequest && e.stage === 'listed');
   return (
-    <li class={`jw-tl-item ${e.state}${e.skipped ? ' skipped' : ''}${next ? ' next' : ''}`} style={{ ['--pct' as string]: e.percent }} aria-current={next ? 'step' : undefined}>
+    <li class={`jw-tl-item ${e.state}${e.header ? ' header' : ''}${e.skipped && !e.header ? ' skipped' : ''}${next ? ' next' : ''}`} style={{ ['--pct' as string]: e.percent }} aria-current={next ? 'step' : undefined}>
       <span class="jw-tl-node" aria-hidden="true">
-        {e.state === 'watched' ? <Icon name="check" size={16} /> : e.skipped ? <Icon name="skip_next" size={16} /> : e.position}
+        {e.header ? <Icon name="tv" size={16} /> : e.state === 'watched' ? <Icon name="check" size={16} /> : e.skipped ? <Icon name="skip_next" size={16} /> : e.position}
       </span>
       <Poster src={imageUrl(e.title?.posterUrl)} alt={title} />
       <div class="jw-tl-body">
@@ -354,7 +368,7 @@ function Row({ e, next, busy, canRequest, reviewUrl, onSkip, onWatch, onRequest 
           {part && <span class="jw-tl-part"> · {part}</span>}
         </div>
         <div class="jw-tl-facts">{[...facts, progress].filter(Boolean).join(' · ')}</div>
-        {e.state === 'in_progress' && <Progress pct={e.percent} />}
+        {e.state === 'in_progress' && !e.header && <Progress pct={e.percent} />}
         <div class="jw-tl-status">
           {!e.matched ? (
             reviewUrl ? (
@@ -376,12 +390,12 @@ function Row({ e, next, busy, canRequest, reviewUrl, onSkip, onWatch, onRequest 
               <Icon name="play_arrow" size={18} /> <span class="jw-hide-sm">Play</span>
             </button>
           )}
-          {canRequest && (
+          {canRequest && !e.header && (
             <button class="jw-btn jw-btn-small" onClick={onRequest} aria-haspopup="dialog" aria-label={`Request ${name}`}>
               <Icon name="add" size={18} /> <span>{e.stage === 'declined' || e.stage === 'failed' ? 'Request Again' : 'Request'}</span>
             </button>
           )}
-          {e.state !== 'watched' && (
+          {e.state !== 'watched' && !e.header && (
             <button
               class={`jw-round${e.skipped ? ' on' : ''}`}
               onClick={onSkip}
@@ -392,16 +406,18 @@ function Row({ e, next, busy, canRequest, reviewUrl, onSkip, onWatch, onRequest 
               <Icon name={e.skipped ? 'undo' : 'skip_next'} size={20} />
             </button>
           )}
-          <button
-            class={`jw-round jw-check${e.state === 'watched' ? ' on' : ''}`}
-            onClick={onWatch}
-            disabled={busy}
-            aria-pressed={e.state === 'watched'}
-            aria-label={e.state === 'watched' ? `${name}: watched. Unmark it` : `Mark ${name} as watched`}
-            title={e.state === 'watched' ? 'Watched · tap to unmark' : 'Mark as watched'}
-          >
-            {busy ? <Spinner /> : <Icon name={e.state === 'watched' ? 'check' : 'radio_button_unchecked'} size={20} />}
-          </button>
+          {!e.header && (
+            <button
+              class={`jw-round jw-check${e.state === 'watched' ? ' on' : ''}`}
+              onClick={onWatch}
+              disabled={busy}
+              aria-pressed={e.state === 'watched'}
+              aria-label={e.state === 'watched' ? `${name}: watched. Unmark it` : `Mark ${name} as watched`}
+              title={e.state === 'watched' ? 'Watched · tap to unmark' : 'Mark as watched'}
+            >
+              {busy ? <Spinner /> : <Icon name={e.state === 'watched' ? 'check' : 'radio_button_unchecked'} size={20} />}
+            </button>
+          )}
         </div>
       )}
     </li>

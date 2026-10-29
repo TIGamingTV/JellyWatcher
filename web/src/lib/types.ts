@@ -103,6 +103,7 @@ export interface JellyfinMirror {
 
 export interface TimelineSummary {
   entries: number;
+  headers?: number;
   films: number;
   shows: number;
   seasons: number;
@@ -144,6 +145,10 @@ export interface TimelineEntry {
   skipped: boolean;
   /** Jellyfin item to open (the episode for episode entries); null when not in the library. */
   jellyfinItemId: string | null;
+  /** A show entry that titles parts of the same show listed after it (no size or watch time of its own). */
+  header?: boolean;
+  /** For headers: how many entries of the show follow it. */
+  parts?: number | null;
 }
 
 export interface JellyfinPluginView {

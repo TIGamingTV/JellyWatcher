@@ -8,7 +8,7 @@ import { IdParam, parse } from '../http/validate.js';
 import { AnilistClient, parseAnilistUrl } from '../providers/anilist.js';
 import { decodeText } from '../providers/csv.js';
 import { parseIdCsv } from '../providers/generic.js';
-import { ImdbClient, parseImdbCsv, parseImdbListUrl } from '../providers/imdb.js';
+import { ImdbClient, parseImdbCsv, parseImdbListUrl, resolveEpisodeItems } from '../providers/imdb.js';
 import { LETTERBOXD_USERNAME, LetterboxdRssClient, LetterboxdWebClient, UploadError, parseLetterboxdCsv, parseLetterboxdUrl, parseLetterboxdZip } from '../providers/letterboxd.js';
 import { MdblistClient, parseMdblistUrl } from '../providers/mdblist.js';
 import { MalClient, parseMalExport, parseMalListUrl } from '../providers/myanimelist.js';
@@ -496,6 +496,16 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
     } catch (err) {
       if (err instanceof UploadError) throw new ApiError(400, 'invalid_file', err.message);
       throw err;
+    }
+    if (results.some((r) => r.items.some((i) => i.episodeImdbId))) {
+      // Episodes in exports carry only their own IMDb id: find their show and numbers on IMDb.
+      const imdb = new ImdbClient();
+      try {
+        results = await Promise.all(results.map((r) => resolveEpisodeItems(r, imdb)));
+      } catch (err) {
+        req.log.warn({ err }, 'IMDb episode lookup failed');
+        throw new ApiError(502, 'imdb_unavailable', 'This file lists TV episodes, and IMDb could not be reached to find their shows. Try the upload again in a moment.');
+      }
     }
 
     const lists = [];

@@ -67,6 +67,8 @@ Infuse. Choose **Show in Jellyfin** on the list, in the JellyWatcher web app or 
 - It holds every matched entry that is in the library, in your order (your own order when you
   reordered the list, the source's order otherwise). Entries marked **Not Watching** are left out.
   Watched state comes from Jellyfin as usual.
+- Lists that mix movies and single episodes of several shows keep that mix in order (best seen in a
+  playlist). A show listed before its own episodes only titles them, so it is not added as a whole.
 - It updates on its own: every few minutes (Dashboard › Plugins › JellyWatcher › **Update every**),
   right away when you change the setting on the Watchlists page, and about a minute after a library
   scan adds or removes titles (Jellyfin drops removed items from collections and playlists; they are

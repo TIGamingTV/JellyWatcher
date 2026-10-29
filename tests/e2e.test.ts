@@ -13,7 +13,8 @@ import { syncJellyfin } from '../server/sync/jellyfin';
 import { syncSeerr } from '../server/sync/seerr';
 import { triggerJob } from '../server/sync/scheduler';
 import { syncMetadata } from '../server/sync/metadata';
-import { ALICE_JF, BOB_JF, HEAT_JF, IMDB_LIST, JF, SEERR, SEV_JF, createMocks } from './helpers/mocks';
+import { ALICE_JF, BOB_JF, HEAT_JF, IMDB_HEADER_LIST, IMDB_LIST, JF, SEERR, SEV_JF, createMocks } from './helpers/mocks';
+import { mirrorPayload } from '../server/services/mirrors';
 
 const SETUP_CODE = 'ABCDE-12345';
 
@@ -299,6 +300,71 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     // Re-sync through the normal path is idempotent and keeps the order.
     const again = await admin.post(`/api/lists/${imdbListId}/sync`);
     expect(again.data.result).toMatchObject({ added: 0, removed: 0, total: 4 });
+  });
+
+  it('treats a show listed before its own episodes as their header', async () => {
+    const r = await admin.post('/api/lists/link', { url: `https://www.imdb.com/list/${IMDB_HEADER_LIST}/` });
+    expect(r.status).toBe(200);
+    const id = r.data.list.id;
+    while (ctx.matcher.pendingCount() > 0 || ctx.jobs.isRunning('match')) await triggerJob(ctx, 'match', 'manual');
+    const tl = (await admin.get(`/api/lists/${id}/timeline`)).data;
+    expect(tl.entries.map((e: any) => [e.kind, e.header, e.parts, e.season, e.episode])).toEqual([
+      ['show', true, 2, null, null],
+      ['episode', false, null, 1, 1],
+      ['movie', false, null, null, null],
+      ['episode', false, null, 1, 2],
+    ]);
+    expect(tl.entries[0]).toMatchObject({ runtime: null, episodes: null, watchedMinutes: 0 });
+    // The whole show's 19 episodes are not counted on top of the two listed ones.
+    expect(tl.summary).toMatchObject({ entries: 3, headers: 1, films: 1, shows: 0, episodes: 2, totalMinutes: 57 + 170 + 57 });
+    expect(tl.nextIndex).not.toBe(0);
+
+    // In Jellyfin the episodes keep their places around the movie; the header is not added.
+    expect((await admin.put(`/api/lists/${id}/mirror`, { mode: 'playlist' })).status).toBe(200);
+    const mirrored = mirrorPayload(ctx).lists.find((l) => l.listId === id)!;
+    expect(mirrored.entries.map((e) => [e.kind, e.season, e.episode])).toEqual([
+      ['episode', 1, 1],
+      ['movie', null, null],
+      ['episode', 1, 2],
+    ]);
+    expect((await admin.del(`/api/lists/${id}`)).status).toBe(200);
+  });
+
+  it('keeps episodes from an IMDb CSV export by looking up their show', async () => {
+    const csv = [
+      'Position,Const,Title,URL,Title Type,Runtime (mins),Year',
+      '1,tt0113277,Heat,https://www.imdb.com/title/tt0113277/,Movie,170,1995',
+      '2,tt11650330,Half Loop,https://www.imdb.com/title/tt11650330/,TV Episode,57,2022',
+      '3,tt0000009,Unknown Episode,https://www.imdb.com/title/tt0000009/,TV Episode,30,2020',
+      '4,tt0083190,Thief,https://www.imdb.com/title/tt0083190/,Movie,123,1981',
+    ].join('\n');
+    const upload = () => admin.req('POST', '/api/lists/upload', undefined, { raw: multipart({ provider: 'imdb' }, { name: 'mann-order.csv', content: csv, type: 'text/csv' }) });
+
+    mocks.state.imdbDown = true;
+    const down = await upload();
+    mocks.state.imdbDown = false;
+    expect(down.status).toBe(502);
+    expect(down.data.error.code).toBe('imdb_unavailable');
+    expect((await admin.get('/api/lists')).data.lists.some((l: any) => l.name === 'mann order')).toBe(false);
+
+    mocks.state.imdbTitleCalls.length = 0;
+    const up = await upload();
+    expect(up.status).toBe(200);
+    expect(mocks.state.imdbTitleCalls).toEqual([['tt11650330', 'tt0000009']]);
+    expect(up.data.lists[0].applied).toMatchObject({ added: 3, skipped: 1 });
+    const id = up.data.lists[0].id;
+    while (ctx.matcher.pendingCount() > 0 || ctx.jobs.isRunning('match')) await triggerJob(ctx, 'match', 'manual');
+    const tl = (await admin.get(`/api/lists/${id}/timeline`)).data;
+    expect(tl.entries.map((e: any) => [e.kind, e.title?.title, e.season, e.episode, e.episodeTitle])).toEqual([
+      ['movie', 'Heat', null, null, null],
+      ['episode', 'Severance', 1, 2, 'Half Loop'],
+      ['movie', 'Thief', null, null, null],
+    ]);
+    expect(tl.entries[1].sourceUrl).toBe('https://www.imdb.com/title/tt11650330/');
+    // A new export of the same list updates it in place.
+    const again = await admin.req('POST', '/api/lists/upload', undefined, { raw: multipart({ provider: 'imdb', replaceListId: String(id) }, { name: 'mann-order.csv', content: csv, type: 'text/csv' }) });
+    expect(again.data.lists[0].applied).toMatchObject({ added: 0, removed: 0, total: 3 });
+    expect((await admin.del(`/api/lists/${id}`)).status).toBe(200);
   });
 
   it('shows the next entry of each list on Home, deduplicated across lists', async () => {

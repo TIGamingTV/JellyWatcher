@@ -16,12 +16,18 @@ export function entryHeading(e: TimelineEntry): { title: string; part: string | 
 
 export function entryFacts(e: TimelineEntry): string[] {
   const facts: (string | null)[] = [];
+  if (e.header) return ['Show', e.parts ? `${plural(e.parts, 'entry', 'entries')} below` : null].filter((f): f is string => Boolean(f));
   if (e.kind === 'movie') facts.push('Movie', e.year ? String(e.year) : null);
   else if (e.kind === 'show') facts.push('Show', e.seasons ? plural(e.seasons, 'season') : null, e.episodes ? plural(e.episodes, 'episode') : null);
   else if (e.kind === 'season') facts.push(e.episodes ? plural(e.episodes, 'episode') : 'Season');
   else facts.push('Episode');
   facts.push(e.runtime ? duration(e.runtime) : null);
   return facts.filter((f): f is string => Boolean(f));
+}
+
+/** Index of the entry to watch next (not watched, not skipped, not a header); -1 when none. */
+export function nextEntryIndex(entries: TimelineEntry[]): number {
+  return entries.findIndex((e) => e.matched && e.state !== 'watched' && !e.skipped && !e.header);
 }
 
 /** The part of the title an entry stands for. */
