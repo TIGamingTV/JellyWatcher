@@ -34,7 +34,8 @@ export function openJellyfinItem(itemId: string): void {
 
 /**
  * Jellyfin draws custom menu links with target="_blank". Links to our page open in the same tab
- * instead (the click still reaches Jellyfin, which closes its menu).
+ * instead (the click still reaches Jellyfin, which closes its menu). From inside the page (a list
+ * is open) the link leads back to all lists, so the address must change, not just be re-announced.
  */
 export function interceptMenuLinks(): void {
   document.addEventListener(
@@ -46,7 +47,7 @@ export function interceptMenuLinks(): void {
       const href = a.getAttribute('href') ?? '';
       if (href !== `#${ROUTE}` && !href.endsWith(`/web/#${ROUTE}`)) return;
       ev.preventDefault();
-      if (!onOurRoute()) window.location.hash = ROUTE;
+      if (window.location.hash !== `#${ROUTE}`) window.location.hash = ROUTE;
       else window.dispatchEvent(new HashChangeEvent('hashchange'));
     },
     true,
