@@ -40,6 +40,25 @@ describe('migrations', () => {
     db.close();
   });
 
+  it('keeps one account per Seerr user: the oldest link stays, later ones are cleared and refused', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jw-mig-'));
+    for (const f of fs.readdirSync(MIGRATIONS).filter((f) => f < '0007')) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(dir, f));
+    const db = openDatabase(':memory:');
+    await migrate(db, { dir });
+    const add = db.prepare("INSERT INTO users (id, username, display_name, seerr_user_id, seerr_username, created_at, updated_at) VALUES (?, ?, ?, ?, 'S', '', '')");
+    add.run(1, 'alice', 'Alice', 7);
+    add.run(2, 'alice-jf', 'Alice', 7);
+    add.run(3, 'bob', 'Bob', 8);
+    fs.copyFileSync(path.join(MIGRATIONS, '0007_unique_seerr_link.sql'), path.join(dir, '0007_unique_seerr_link.sql'));
+    expect(await migrate(db, { dir })).toEqual(['0007_unique_seerr_link.sql']);
+    expect(db.prepare('SELECT id, seerr_user_id, seerr_username FROM users ORDER BY id').all()).toEqual([
+      { id: 1, seerr_user_id: 7, seerr_username: 'S' },
+      { id: 2, seerr_user_id: null, seerr_username: null },
+      { id: 3, seerr_user_id: 8, seerr_username: 'S' },
+    ]);
+    expect(() => db.prepare('UPDATE users SET seerr_user_id = 7 WHERE id = 3').run()).toThrow(/UNIQUE/);
+  });
+
   it('rolls back a failing migration without recording it', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jw-mig-'));
     fs.copyFileSync(path.join(MIGRATIONS, '0001_initial.sql'), path.join(dir, '0001_initial.sql'));

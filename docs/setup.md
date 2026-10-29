@@ -95,6 +95,8 @@ stored value.
   - Accounts link automatically when a Seerr user has the same Jellyfin user id (Settings › Users ›
     *Match Seerr Users*). Otherwise choose the Seerr user manually.
   - Requests are sent *as* that Seerr user, so Seerr's own permissions, quotas and approval rules apply.
+  - A Seerr user can be linked to one account only, so requests made in Seerr are credited to the
+    right person. Unlink it from the other account first.
 - **Sign in with Jellyfin:** on by default (Settings › Users › *Allow Jellyfin sign-in*). *Let everyone
   on the Jellyfin server sign in* creates a member account on first sign-in; otherwise only people you
   add or import can sign in.

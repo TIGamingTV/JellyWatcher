@@ -77,6 +77,9 @@ export async function adminRoutes(app: FastifyInstance, { ctx, users, sessions }
         const seerr = ctx.integrations.seerr();
         const match = seerr ? (await seerr.users()).find((u) => u.id === body.seerrUserId) : undefined;
         if (!match) throw new ApiError(400, 'unknown_seerr_user', 'That Seerr user was not found.');
+        // Requests synced from Seerr are credited by Seerr user, so one Seerr user may be linked once.
+        const holder = ctx.db.prepare('SELECT username FROM users WHERE seerr_user_id = ? AND id != ?').get(match.id, id) as { username: string } | undefined;
+        if (holder) throw new ApiError(409, 'seerr_user_taken', `That Seerr user is already linked to ${holder.username}. Unlink it there first.`);
         Object.assign(patch, { seerrUserId: match.id, seerrUsername: match.displayName ?? match.username ?? null, seerrPermissions: match.permissions ?? null });
       }
     }

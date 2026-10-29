@@ -570,7 +570,44 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     await admin.put('/api/admin/settings', { 'auth.jellyfinAutoCreate': true });
     const created = await plugin('GET', '/api/plugin/bootstrap', h(stranger, { 'x-jw-jellyfin-name': encodeURIComponent('Zoë Example') }));
     expect(created.data.user).toMatchObject({ username: 'ZoExample', displayName: 'Zoë Example' });
+    const roleOf = (username: string) => (ctx.db.prepare('SELECT role FROM users WHERE username = ?').get(username) as { role: string }).role;
+    expect(roleOf('ZoExample')).toBe('user');
+
+    // Bob opens the page in Jellyfin: his own new account (the local "bob" is someone else to
+    // JellyWatcher), never Alice's lists, and Seerr sees him as his own Seerr user.
+    const asBob = (method: string, url: string, body?: unknown) => plugin(method, url, h(BOB_JF, { 'x-jw-jellyfin-name': 'bob' }), body);
+    const bobBoot = await asBob('GET', '/api/plugin/bootstrap');
+    expect(bobBoot.data.user).toMatchObject({ username: 'bob-jf' });
+    expect(roleOf('bob-jf')).toBe('user');
+    expect((await asBob('GET', '/api/lists')).data.lists).toEqual([]);
+    for (const [m, u, b] of [
+      ['GET', `/api/lists/${imdbListId}`],
+      ['GET', `/api/lists/${imdbListId}/timeline`],
+      ['POST', `/api/lists/${imdbListId}/sync`, {}],
+      ['PUT', `/api/lists/${imdbListId}/mirror`, { mode: 'playlist' }],
+    ] as const) {
+      expect((await asBob(m, u, b)).status, `${m} ${u}`).toBe(404);
+    }
+    expect((await admin.get(`/api/lists/${imdbListId}`)).data.list.jellyfin).toBeNull();
+    await syncSeerr(ctx); // links bob-jf to Seerr user 2 by his Jellyfin id
+    mocks.state.seerrCalls.length = 0;
+    expect((await asBob('GET', `/api/titles/${thief}/eligibility`)).status).toBe(200);
+    expect(mocks.state.seerrCalls.filter((c) => c.path.startsWith('/movie/')).map((c) => c.apiUser)).toEqual(['2']);
+    mocks.state.seerrCalls.length = 0;
+    expect((await plugin('GET', `/api/titles/${thief}/eligibility`, h(ALICE_JF))).status).toBe(200);
+    expect(mocks.state.seerrCalls.filter((c) => c.path.startsWith('/movie/')).map((c) => c.apiUser)).toEqual(['1']);
+    // One Seerr user, one account: linking it to the local "bob" too is refused.
+    const localBob = (await admin.get('/api/admin/users')).data.users.find((x: any) => x.username === 'bob');
+    const taken = await admin.patch(`/api/admin/users/${localBob.id}`, { seerrUserId: 2 });
+    expect(taken.status).toBe(409);
+    expect(taken.data.error.code).toBe('seerr_user_taken');
     await admin.put('/api/admin/settings', { 'auth.jellyfinAutoCreate': false });
+
+    // Jellyfin user ids only count on the Jellyfin server JellyWatcher is connected to.
+    const elsewhere = await plugin('GET', '/api/lists', h(ALICE_JF, { 'x-jw-jellyfin-server': 'f'.repeat(32) }));
+    expect(elsewhere.status).toBe(403);
+    expect(elsewhere.data.error.code).toBe('plugin_server');
+    expect((await plugin('GET', '/api/lists', h(ALICE_JF, { 'x-jw-jellyfin-server': 'SRV1' }))).status).toBe(200);
 
     const view = (await admin.get('/api/integrations/jellyfin-plugin')).data;
     expect(view.lastSeen).toMatchObject({ version: '0.5.0.0', jellyfinServerId: 'srv1' });

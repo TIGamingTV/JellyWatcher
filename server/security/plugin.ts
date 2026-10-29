@@ -122,11 +122,20 @@ export async function authenticatePluginRequest(req: FastifyRequest, ctx: AppCon
   req.viaPlugin = true;
   const version = header(req, PLUGIN_VERSION_HEADER);
   const server = header(req, PLUGIN_SERVER_HEADER);
+  const serverId = server && /^[A-Za-z0-9-]{1,64}$/.test(server) ? server.replace(/-/g, '').toLowerCase() : null;
   keys.seen = {
     at: nowIso(),
     version: version && /^[0-9.]{1,20}$/.test(version) ? version : null,
-    jellyfinServerId: server && /^[A-Za-z0-9-]{1,64}$/.test(server) ? server.replace(/-/g, '').toLowerCase() : null,
+    jellyfinServerId: serverId,
   };
+  // Jellyfin user ids are only meaningful on their own server. A key copied to another (or a cloned)
+  // Jellyfin server must not map that server's users onto these accounts.
+  const known = ctx.integrations.get('jellyfin').serverInfo?.serverId;
+  const expected = typeof known === 'string' && known ? known.replace(/-/g, '').toLowerCase() : null;
+  if (expected && serverId && serverId !== expected) {
+    req.log.warn({ serverId, expected }, 'plugin request from another Jellyfin server');
+    throw new ApiError(403, 'plugin_server', 'This JellyWatcher is connected to a different Jellyfin server. Use the plugin on that server, or connect JellyWatcher to this one.');
+  }
   if (!route.user) return true;
 
   const userId = (header(req, PLUGIN_USER_HEADER) ?? '').replace(/-/g, '').toLowerCase();
