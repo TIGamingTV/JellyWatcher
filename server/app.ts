@@ -47,6 +47,13 @@ export async function buildApp(ctx: AppContext, opts: { setupCode: () => string 
     req.log.info({ method: req.method, path: req.url.split('?')[0], status: reply.statusCode, ms: Math.round(reply.elapsedTime) }, 'request');
   });
 
+  // API answers are per person and may hold secrets (keys shown to admins, CSRF tokens): never let a
+  // browser or a proxy cache keep them. Images set their own caching.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (req.url.startsWith('/api/') && !reply.hasHeader('cache-control')) reply.header('Cache-Control', 'no-store');
+    return payload;
+  });
+
   await app.register(cookie);
   await app.register(helmet, {
     contentSecurityPolicy: {

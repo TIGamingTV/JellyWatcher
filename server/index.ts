@@ -28,6 +28,9 @@ async function main() {
   assertWritable(config.dataDir);
   const log = createLogger(config);
   log.info({ version: config.version, dataDir: config.dataDir }, 'starting JellyWatcher');
+  if (config.trustProxy === true) {
+    log.info('JW_TRUST_PROXY=true trusts X-Forwarded-* from every client; if JellyWatcher is also reachable without the proxy, set it to the proxy address instead');
+  }
 
   const { box, source } = SecretBox.load(config.dataDir, config.secretKey);
   if (source === 'generated') log.warn({ file: path.join(config.dataDir, 'secret.key') }, 'generated a new encryption key; back it up together with the database');

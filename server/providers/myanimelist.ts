@@ -1,11 +1,11 @@
 import { XMLParser } from 'fast-xml-parser';
-import { gunzipSync } from 'fflate';
+import { gunzipSync } from 'node:zlib';
 import { z } from 'zod';
 import { HttpClient, type FetchLike } from '../http/client.js';
 import { ProviderError } from '../http/errors.js';
 import { animeItem, type AnimeIds } from './anime.js';
 import { decodeText, toInt } from './csv.js';
-import { UploadError } from './letterboxd.js';
+import { MAX_UNZIPPED_BYTES, UploadError } from './letterboxd.js';
 import type { ListFetchResult, SourceItem } from './types.js';
 
 /**
@@ -135,8 +135,10 @@ export function parseMalExport(buf: Uint8Array, provider: 'myanimelist' | 'anili
   let data = buf;
   if (buf[0] === 0x1f && buf[1] === 0x8b) {
     try {
-      data = gunzipSync(buf);
-    } catch {
+      // Capped, so a small "gzip bomb" cannot unpack into gigabytes of memory.
+      data = gunzipSync(buf, { maxOutputLength: MAX_UNZIPPED_BYTES });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') throw new UploadError('The archive is too large.');
       throw new UploadError('The .gz file could not be unpacked.');
     }
   }

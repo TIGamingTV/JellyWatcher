@@ -15,7 +15,7 @@ export function posterUrl(t: { poster_path: string | null }, jf?: { id: string; 
 }
 
 export function userCtx(u: SessionUser): UserContext {
-  return { id: u.id, jellyfinUserId: u.jellyfinUserId, seerrUserId: u.seerrUserId };
+  return { id: u.id, jellyfinUserId: u.jellyfinUserId, seerrUserId: u.seerrUserId, role: u.role };
 }
 
 export type CardRow = TitleRow & { jf_id?: string | null; jf_tag?: string | null };

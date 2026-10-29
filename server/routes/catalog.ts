@@ -209,7 +209,13 @@ export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
       },
       status,
       lists: memberships,
-      requests: requests.map((r) => ({ ...r, mine: r.userId === u.id, seasons: parseJson(r.seasons as string, []) })),
+      // Others' requests show that the title was requested, not by whom or why they failed.
+      requests: requests.map((r) => {
+        const mine = r.userId === u.id;
+        const visible = mine || u.role === 'admin';
+        const { userId: _owner, ...rest } = r;
+        return { ...rest, ...(visible ? {} : { requestedBy: null, lastError: null }), mine, seasons: parseJson(r.seasons as string, []) };
+      }),
       links: {
         jellyfin: jf && jfClient ? jfClient.webUrl(jf.id, jf.server_id, ctx.integrations.jellyfinPublicUrl()) : null,
         seerr: seerrBase && t.tmdb_id ? `${seerrBase}/${t.media_type === 'movie' ? 'movie' : 'tv'}/${t.tmdb_id}` : null,
@@ -327,7 +333,8 @@ export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
       req.query,
     );
     const jf = ctx.integrations.view('jellyfin');
-    if (!jf.ready) return { configured: false, total: 0, items: [], jellyfin: jf };
+    // The full integration view (addresses, server info) is for administrators only.
+    if (!jf.ready) return { configured: false, total: 0, items: [], jellyfin: u.role === 'admin' ? jf : { ready: jf.ready, status: jf.status, lastOkAt: jf.lastOkAt, lastError: null } };
     const where = ['1 = 1'];
     const args: unknown[] = [u.jellyfinUserId ?? ''];
     if (q.type) {
@@ -357,7 +364,7 @@ export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
       linked: Boolean(u.jellyfinUserId),
       total,
       items: rows.map((r) => ({ ...(r.titleId ? cards.get(r.titleId) : null), jellyfinItemId: r.jfId, addedAt: r.addedAt })).filter((c) => c.id),
-      jellyfin: { lastOkAt: jf.lastOkAt, status: jf.status, lastError: jf.lastError },
+      jellyfin: { lastOkAt: jf.lastOkAt, status: jf.status, lastError: u.role === 'admin' ? jf.lastError : jf.status === 'error' ? 'Jellyfin is currently unavailable.' : null },
     };
   });
 

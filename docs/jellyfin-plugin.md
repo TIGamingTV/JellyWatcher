@@ -93,6 +93,15 @@ JellyWatcher /api/...  ── key checked, account found by Jellyfin user id, ro
   server-side secret. Rate limits count per person instead of per IP.
 - When JellyWatcher rejects the key, the plugin answers 503 instead of 401, so Jellyfin's web app
   does not sign the person out.
+- The artwork route needs no Jellyfin sign-in (`<img>` tags send no token), so JellyWatcher only
+  serves posters of titles it already knows through it: no open image proxy, no filling its cache.
+  Only JPEG, PNG, WebP, GIF and AVIF pass, with `nosniff`; API answers are passed on only as JSON.
+- **Connection test:** the saved key is only sent to the saved address. To test a new address,
+  enter the key again.
+- **Which address to enter:** one Jellyfin's *server* reaches, ideally a Docker network name
+  (`http://jellywatcher:8484`) or a Tailscale address. Plain `http://` is fine there; across the
+  internet use `https://`, since the key travels with every request. Whether people open Jellyfin
+  over HTTPS or HTTP does not matter: the browser only ever talks to Jellyfin.
 
 ## Limits
 

@@ -46,7 +46,12 @@ COPY --from=build --chown=root:root /app/dist ./dist
 COPY --chown=root:root package.json ./
 
 # Application files stay root-owned and read-only; only /data is writable by the app user.
-RUN mkdir -p /data && chown node:node /data
+# npm, npx, corepack and yarn are not needed at runtime: removing them shrinks the attack surface and
+# the list of packages a vulnerability scanner reports.
+RUN mkdir -p /data && chown node:node /data \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+           /root/.npm /tmp/*
 USER node
 VOLUME ["/data"]
 EXPOSE 8484

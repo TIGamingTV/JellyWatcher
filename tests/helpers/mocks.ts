@@ -122,6 +122,9 @@ export function createMocks() {
       const auth = headers.get('authorization') ?? '';
       if (!auth.startsWith('MediaBrowser ')) return new Response('', { status: 401 });
       const authed = auth.includes(`Token="${JF.key}"`);
+      if (authed && /^\/Items\/[a-f0-9]{32}\/Images\/Primary$/.test(url.pathname)) {
+        return new Response(Buffer.from([0xff, 0xd8, 0xff]), { status: 200, headers: { 'content-type': 'image/jpeg' } });
+      }
       switch (url.pathname) {
         case '/System/Info/Public':
           return json({ ServerName: 'Home', Version: '12.4.0', Id: 'srv1', ProductName: 'Jellyfin Server' });

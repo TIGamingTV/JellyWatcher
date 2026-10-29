@@ -178,8 +178,8 @@ Without webhooks, JellyWatcher polls on the schedule in Settings › Sync. Defau
 | `JW_HOST_PORT` | `8484` | Published port (Compose only). |
 | `JW_DATA_DIR` | `/data` | Database, key, cache, logs, backups. |
 | `JW_PUBLIC_URL` | — | Public origin, e.g. `https://watch.example.com`. Used for cross-site checks behind proxies. |
-| `JW_TRUST_PROXY` | `false` | Trust `X-Forwarded-*` from a reverse proxy. |
-| `JW_COOKIE_SECURE` | `auto` | `auto`, `true` or `false`. |
+| `JW_TRUST_PROXY` | `false` | Trust `X-Forwarded-*` from a reverse proxy: `true`, or better the proxy's IPs/CIDR ranges, comma-separated (see [Operations](operations.md#reverse-proxy)). |
+| `JW_COOKIE_SECURE` | `auto` | `auto` (Secure over HTTPS only), `true` or `false`. Keep `auto` when you also use plain HTTP, e.g. over Tailscale. |
 | `JW_SECRET_KEY` | — | 64 hex characters (`openssl rand -hex 32`). If unset, `/data/secret.key` is generated. |
 | `JW_SETUP_TOKEN` | — | Fixed first-run setup code instead of the logged one. |
 | `JW_SESSION_TTL_DAYS` | `30` | Sliding session lifetime. |

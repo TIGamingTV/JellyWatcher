@@ -7,6 +7,7 @@ import type { TitleService } from './titles.js';
 
 interface PendingRow {
   id: number;
+  user_id: number;
   provider: string;
   media_type: MediaType | null;
   source_title: string;
@@ -28,6 +29,8 @@ export interface MatchStats {
 }
 
 const MAX_ATTEMPTS = 5;
+
+type Outcome = { status: 'matched' | 'review' | 'unmatched' | 'ignored' | 'deferred'; titleId?: number | null; method?: string; confidence?: number; candidates?: unknown[] };
 
 /**
  * Resolves imported entries to canonical titles. Order: stored user decision → TMDb id → IMDb id →
@@ -51,20 +54,24 @@ export class Matcher {
   async run(meta: MetadataSource | null, limit = 400): Promise<MatchStats> {
     const rows = this.db
       .prepare(
-        `SELECT li.id, l.provider, li.media_type, li.source_title, li.source_year, li.tmdb_id, li.imdb_id, li.tvdb_id, li.source_url, li.match_attempts
+        `SELECT li.id, l.user_id, l.provider, li.media_type, li.source_title, li.source_year, li.tmdb_id, li.imdb_id, li.tvdb_id, li.source_url, li.match_attempts
            FROM list_items li JOIN lists l ON l.id = li.list_id
           WHERE li.match_status = 'pending' ORDER BY li.id LIMIT ?`,
       )
       .all(limit) as PendingRow[];
     const stats: MatchStats = { processed: 0, matched: 0, review: 0, unmatched: 0, ignored: 0, deferred: 0 };
-    const cache = new Map<string, Awaited<ReturnType<Matcher['resolve']>>>();
+    const cache = new Map<string, Outcome>();
 
     for (const row of rows) {
       stats.processed++;
       try {
-        const key = this.fingerprint(row) + `|${row.tmdb_id ?? ''}|${row.imdb_id ?? ''}`;
-        const outcome = cache.get(key) ?? (await this.resolve(row, meta));
-        cache.set(key, outcome);
+        // Decisions are per person; everything after them is the same for everyone and cached.
+        let outcome: Outcome | undefined = this.decided(row);
+        if (!outcome) {
+          const key = `${this.fingerprint(row)}|${row.tmdb_id ?? ''}|${row.imdb_id ?? ''}`;
+          outcome = cache.get(key) ?? (await this.resolve(row, meta));
+          cache.set(key, outcome);
+        }
         if (outcome.status === 'deferred') {
           stats.deferred++;
           continue;
@@ -89,17 +96,26 @@ export class Matcher {
     return stats;
   }
 
-  private async resolve(
-    row: PendingRow,
-    meta: MetadataSource | null,
-  ): Promise<{ status: 'matched' | 'review' | 'unmatched' | 'ignored' | 'deferred'; titleId?: number | null; method?: string; confidence?: number; candidates?: unknown[] }> {
-    // 1. A person already decided how this entry maps.
-    const decision = this.db.prepare('SELECT title_id, ignored FROM match_resolutions WHERE fingerprint = ?').get(this.fingerprint(row)) as
+  /**
+   * 1. A person already decided how this entry maps: the list owner, or else an administrator.
+   * Other users' decisions never apply, so nobody can steer how someone else's entries match.
+   */
+  private decided(row: PendingRow): Outcome | undefined {
+    const decision = this.db
+      .prepare(
+        `SELECT r.title_id, r.ignored FROM match_resolutions r JOIN users u ON u.id = r.user_id
+          WHERE r.fingerprint = ? AND (r.user_id = ? OR u.role = 'admin')
+          ORDER BY (r.user_id = ?) DESC, r.created_at DESC LIMIT 1`,
+      )
+      .get(this.fingerprint(row), row.user_id, row.user_id) as
       | { title_id: number | null; ignored: number }
       | undefined;
     if (decision?.ignored) return { status: 'ignored', method: 'manual' };
     if (decision?.title_id && this.titles.get(decision.title_id)) return { status: 'matched', titleId: decision.title_id, method: 'manual', confidence: 1 };
+    return undefined;
+  }
 
+  private async resolve(row: PendingRow, meta: MetadataSource | null): Promise<Outcome> {
     // 2. Source supplied a TMDb id: exact.
     if (row.tmdb_id && row.media_type) {
       const titleId = this.titles.ensure({ mediaType: row.media_type, tmdbId: row.tmdb_id, imdbId: row.imdb_id, tvdbId: row.tvdb_id, title: row.source_title, year: row.source_year, source: row.provider });
@@ -154,8 +170,8 @@ export class Matcher {
       let titleId: number | null = null;
       if (choice !== 'ignore') titleId = this.titles.ensure({ mediaType: choice.mediaType, tmdbId: choice.tmdbId, title: choice.title, year: choice.year, source: 'manual' });
       this.db
-        .prepare('INSERT INTO match_resolutions (fingerprint, title_id, ignored, decided_by, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(fingerprint) DO UPDATE SET title_id = excluded.title_id, ignored = excluded.ignored, decided_by = excluded.decided_by')
-        .run(fp, titleId, choice === 'ignore' ? 1 : 0, userId, nowIso());
+        .prepare('INSERT INTO match_resolutions (fingerprint, user_id, title_id, ignored, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(fingerprint, user_id) DO UPDATE SET title_id = excluded.title_id, ignored = excluded.ignored, created_at = excluded.created_at')
+        .run(fp, userId, titleId, choice === 'ignore' ? 1 : 0, nowIso());
       // Apply to all of this user's entries with the same fingerprint.
       const siblings = this.db
         .prepare('SELECT li.id, l.provider, li.source_url, li.source_title, li.source_year, li.media_type FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.user_id = ? AND li.match_status IN (\'review\', \'unmatched\', \'pending\', \'matched\', \'ignored\')')

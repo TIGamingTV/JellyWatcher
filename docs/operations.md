@@ -55,9 +55,46 @@ Downgrading without restoring is not supported once a newer migration has been a
 
 ## Reverse proxy
 
-Set `JW_TRUST_PROXY=true` and `JW_PUBLIC_URL=https://watch.example.com`, and serve over HTTPS. Then the
+Set `JW_TRUST_PROXY` and `JW_PUBLIC_URL=https://watch.example.com`, and serve over HTTPS. Then the
 session cookie is marked `Secure` (with `JW_COOKIE_SECURE=auto`), and cross-site checks know the public
 origin. Enable HSTS at the proxy.
+
+`JW_TRUST_PROXY` takes `true` or, better, the proxy's address: a comma-separated list of IPs or CIDR
+ranges (`loopback`, `linklocal` and `uniquelocal` work too). Only requests from those addresses may
+set `X-Forwarded-For`, `-Proto` and `-Host`. Use an address whenever JellyWatcher can also be reached
+without the proxy: with `true`, anyone connecting directly could fake `X-Forwarded-For` and get around
+the per-address limits on sign-in attempts.
+
+### HTTPS through nginx and plain HTTP over Tailscale at the same time
+
+Both work side by side with the same container and the same accounts:
+
+```env
+JW_PUBLIC_URL=https://watch.example.com
+JW_TRUST_PROXY=172.16.0.0/12      # where nginx connects from, see below
+JW_COOKIE_SECURE=auto             # keep auto: true would break sign-in over plain HTTP
+```
+
+- **Through nginx** (`https://watch.example.com`): the cookie is `Secure`, and the address is checked
+  against `JW_PUBLIC_URL` / `X-Forwarded-Host`.
+- **Over Tailscale** (`http://<machine>:8484` or `http://100.x.y.z:8484`): the cookie is not `Secure`
+  (it could not be sent back over HTTP otherwise), and the address is checked against the `Host`
+  header. The connection is still encrypted by WireGuard. Each address has its own sign-in.
+- JellyWatcher sends no HSTS and no `upgrade-insecure-requests`, so plain HTTP keeps working. Add HSTS
+  in nginx only (for the domain name, it never applies to the Tailscale address).
+
+Which address does nginx connect from? Look at the `ip` of a sign-in in Settings › Sessions, or:
+
+| nginx runs | `JW_TRUST_PROXY` |
+| --- | --- |
+| On the Docker host, `proxy_pass http://127.0.0.1:8484` | The Docker bridge gateway, e.g. `172.17.0.1` (or `172.16.0.0/12`) |
+| In a container on the same Docker network | That container's address or the network's subnet |
+| On another machine | That machine's LAN address |
+
+Don't trust a range that also contains clients connecting directly. Tailscale peers (`100.64.0.0/10`)
+are not in any of the ranges above. To keep the plain HTTP port off your LAN and the internet, publish
+it on the Tailscale address only, e.g. `ports: ["100.x.y.z:8484:8484"]` (plus `127.0.0.1:8484:8484`
+for an nginx on the host).
 
 Caddy:
 ```
@@ -73,10 +110,13 @@ location / {
   proxy_set_header Host $host;
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_set_header X-Forwarded-Host $host;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-For $remote_addr;   # replace, don't append, what the client sent
   client_max_body_size 30m;   # export uploads
+  add_header Strict-Transport-Security "max-age=31536000" always;
 }
 ```
+
+If the site uses a port other than 443, use `$http_host` instead of `$host` (it keeps the port).
 
 Serving under a sub-path (e.g. `/watch/`) is not supported; use a sub-domain.
 
