@@ -34,7 +34,7 @@ export interface Me {
   /** Jellyfin sign-in details, when signing in with Jellyfin is available. */
   jellyfin: { serverName: string | null; quickConnect: boolean; autoCreate: boolean } | null;
   version: string;
-  services?: { jellyfin: boolean; seerr: boolean; tmdb: boolean; trakt: boolean; metadata: 'tmdb' | 'seerr' | null };
+  services?: { jellyfin: boolean; seerr: boolean; tmdb: boolean; trakt: boolean; jellyfinPlugin: boolean; metadata: 'tmdb' | 'seerr' | null };
   sources?: SourceDescriptor[];
 }
 
@@ -81,7 +81,24 @@ export interface ListView {
   /** Reordered by the person (kept across syncs). */
   customOrder: boolean;
   summary: TimelineSummary | null;
+  /** Shown in Jellyfin through the plugin; null when not. */
+  jellyfin: JellyfinMirror | null;
   createdAt: string;
+}
+
+export type JellyfinMirrorMode = 'collection' | 'playlist';
+
+export interface JellyfinMirror {
+  mode: JellyfinMirrorMode;
+  /** The plugin has applied the current setting. */
+  synced: boolean;
+  jellyfinId: string | null;
+  /** Items in the collection or playlist. */
+  applied: number;
+  /** Entries not found in the Jellyfin library. */
+  missing: number;
+  error: string | null;
+  syncedAt: string | null;
 }
 
 export interface TimelineSummary {

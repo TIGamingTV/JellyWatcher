@@ -60,12 +60,13 @@ are fetched in `sync/lists.ts`. Matching, dedup, status and UI then work unchang
 | `users`, `sessions` | Local or Jellyfin-backed accounts. Sessions store `sha256(token)` and a CSRF token. |
 | `integrations` | Server-wide services. Config is JSON; secrets are AES-256-GCM encrypted. |
 | `connections` | Per-user source accounts (Trakt tokens encrypted, Letterboxd username). |
-| `lists`, `list_items` | Every imported list (with its display: auto, grid or timeline) and its raw entries in list order, with season/episode numbers for partial entries, source runtimes, match status, method, confidence and candidates. |
+| `lists`, `list_items` | Every imported list (with its display: auto, grid or timeline, and whether it is shown in Jellyfin) and its raw entries in list order, with season/episode numbers for partial entries, source runtimes, match status, method, confidence and candidates. |
 | `titles` | Canonical titles, unique on `(media_type, tmdb_id)`. |
 | `match_resolutions` | Manual match decisions keyed by a source fingerprint, reused on re-import. |
 | `jellyfin_items`, `jellyfin_user_data`, `jellyfin_episodes` | Library index, per-Jellyfin-user viewing state, and episodes of listed series. |
 | `watch_history`, `watched_episodes` | Per-person viewing state that outlives the library, so deleted titles stay watched. |
 | `manual_watches`, `skipped_entries` | The person's own watched marks (with dates) and *Not Watching* marks, per title, season or episode. |
+| `list_mirrors` | What the Jellyfin plugin last did with a list shown in Jellyfin (collection or playlist id, items, entries not in the library, error). |
 | `seerr_media`, `requests` | Mirror of Seerr media status and requests. |
 | `sync_runs`, `activity` | Job history and the Home activity feed. |
 
@@ -95,11 +96,15 @@ merged.
 | Viewing progress | Jellyfin user data for the linked account, plus the person's own marks | Never written back. Copied to `watch_history` / `watched_episodes` while a title is in the library; used once it is gone. Live data wins while present (marking unwatched in Jellyfin clears the history). Manual marks (`manual_watches`: whole title, season or episode, with a date) are stored separately, only ever add "watched", and are never touched by a sync. |
 | List order | The source, unless the person reordered | Drag-and-drop order is stored in `list_items.custom_position` and survives syncs; new entries from the source follow afterwards. Resetting clears it. |
 | Local lists | JellyWatcher | `provider = 'local'`: created or duplicated in JellyWatcher, edited here, never synced. Duplicates copy every entry with its match. |
+| Lists shown in Jellyfin | JellyWatcher | `lists.jellyfin_mirror` (`collection` or `playlist`). The plugin reports what it applied to `list_mirrors`; switching or turning it off drops that report. |
 | Requests | Seerr | Before a request is submitted, Seerr is checked live (`/movie|tv/{id}` as the user). Then duplicates (409), permissions, quota and blocklist (403), and missing seasons (202) are mapped to clear messages. |
 
 JellyWatcher is **read-only** towards every service except for creating Seerr requests (and, once
 during the guided setup, creating its own Jellyfin API key with the administrator's session). This
-avoids loops of conflicting state.
+avoids loops of conflicting state. The one exception runs the other way round: when a person chooses
+**Show in Jellyfin** for a list, the [Jellyfin plugin](jellyfin-plugin.md#collections-and-playlists)
+fetches what that list should look like (`GET /api/plugin/mirrors`) and makes Jellyfin match it. It
+only changes collections and playlists it created, and JellyWatcher never calls the plugin.
 
 Each status shown in the UI carries `syncedAt`, `source` and `stale`. Stale means not synced
 within 3× the interval, or the last sync failed. The UI says "Possibly outdated" instead of

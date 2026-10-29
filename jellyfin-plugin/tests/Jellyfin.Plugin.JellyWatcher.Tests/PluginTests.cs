@@ -14,6 +14,7 @@ public class PluginRoutesTests
     [InlineData("GET", "lists/12/timeline")]
     [InlineData("GET", "lists/12/timeline/")]
     [InlineData("POST", "lists/12/sync")]
+    [InlineData("PUT", "lists/12/mirror")]
     [InlineData("POST", "lists/link")]
     [InlineData("POST", "lists/local")]
     [InlineData("POST", "lists/trakt")]
@@ -34,6 +35,9 @@ public class PluginRoutesTests
     [InlineData("GET", "lists/12/../../admin/users")]
     [InlineData("GET", "lists/12%2F..%2Fadmin")]
     [InlineData("GET", "plugin/status")]
+    [InlineData("GET", "plugin/mirrors")]
+    [InlineData("POST", "plugin/mirrors/report")]
+    [InlineData("POST", "lists/12/mirror")]
     [InlineData("GET", "")]
     [InlineData("GET", null)]
     public void RefusesEverythingElse(string method, string? path) => Assert.False(PluginRoutes.IsAllowed(method, path));

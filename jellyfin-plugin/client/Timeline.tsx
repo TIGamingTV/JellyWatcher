@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { entryRequestable, REQUEST_STATE_LABEL, STAGE_LABEL } from '../../shared/status';
 import { date, duration, plural } from '../../web/src/lib/format';
 import { entryFacts, entryHeading, scopeOf } from '../../web/src/lib/timeline';
-import type { Eligibility, ListView, Timeline, TimelineEntry } from '../../web/src/lib/types';
+import { MIRROR_HINT, MIRROR_INTRO, MIRROR_OPTIONS, mirrorStatus } from '../../web/src/lib/mirror';
+import type { Eligibility, JellyfinMirrorMode, ListView, Timeline, TimelineEntry } from '../../web/src/lib/types';
 import { api, errorText, imageUrl } from './api';
 import { listSource, syncLabel, webLink, type Ctx } from './App';
 import { openJellyfinItem } from './jf-dom';
@@ -24,6 +25,7 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
   const [syncing, setSyncing] = useState(false);
   const [busyItem, setBusyItem] = useState<number | null>(null);
   const [requesting, setRequesting] = useState<TimelineEntry | null>(null);
+  const [mirroring, setMirroring] = useState(false);
   const scrolled = useRef(false);
 
   const reload = () => setTick((n) => n + 1);
@@ -45,11 +47,12 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
   }, [id, tick]);
 
   const busy = list ? list.lastStatus === 'running' || list.pending > 0 : false;
+  const mirrorPending = Boolean(list?.jellyfin && !list.jellyfin.synced);
   useEffect(() => {
-    if (!busy) return;
-    const t = window.setTimeout(reload, 4000);
+    if (!busy && !mirrorPending) return;
+    const t = window.setTimeout(reload, busy ? 4000 : 5000);
     return () => window.clearTimeout(t);
-  }, [busy, list]);
+  }, [busy, mirrorPending, list]);
 
   const nextIndex = entries.findIndex((e) => e.matched && e.state !== 'watched' && !e.skipped);
 
@@ -153,6 +156,9 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
               <Icon name="open_in_new" size={18} /> JellyWatcher
             </a>
           )}
+          <button class="jw-btn" onClick={() => setMirroring(true)} aria-haspopup="dialog">
+            <Icon name={list.jellyfin?.mode === 'playlist' ? 'playlist_play' : 'video_library'} size={18} /> {list.jellyfin ? 'In Jellyfin' : 'Show in Jellyfin'}
+          </button>
           {list.canSync && (
             <button class="jw-btn" onClick={runSync} disabled={syncing || list.lastStatus === 'running'}>
               {syncing ? <Spinner /> : <Icon name="sync" size={18} />} Sync
@@ -160,6 +166,7 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
           )}
         </div>
       </div>
+      {list.jellyfin && <MirrorLine list={list} />}
 
       <section class="jw-summary" aria-label="List totals">
         <div class="jw-stats">
@@ -214,6 +221,18 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
         </ol>
       )}
 
+      {mirroring && (
+        <MirrorDialog
+          list={list}
+          onClose={() => setMirroring(false)}
+          onChanged={(l, message) => {
+            setList(l);
+            ctx.toast('success', message);
+            reload();
+          }}
+        />
+      )}
+
       {requesting?.title && (
         <RequestDialog
           entry={requesting}
@@ -226,6 +245,71 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
         />
       )}
     </>
+  );
+}
+
+function MirrorLine({ list }: { list: ListView }) {
+  const s = mirrorStatus(list.jellyfin!);
+  return (
+    <div class={`jw-card-status jw-status-${s.kind} jw-mirror-line`}>
+      {s.kind === 'busy' ? <Spinner /> : <Icon name={s.kind === 'error' ? 'error' : list.jellyfin!.mode === 'playlist' ? 'playlist_play' : 'video_library'} size={18} />}
+      <span>{s.text}</span>
+    </div>
+  );
+}
+
+function MirrorDialog({ list, onClose, onChanged }: { list: ListView; onClose: () => void; onChanged: (l: ListView, message: string) => void }) {
+  const current = list.jellyfin?.mode ?? 'off';
+  const [choice, setChoice] = useState<'off' | JellyfinMirrorMode>(current);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const mode = choice === 'off' ? null : choice;
+      const r = await api.mirror(list.id, mode);
+      // The plugin applies it right away; without this it would wait for its next interval.
+      await api.applyMirrors().catch(() => undefined);
+      onChanged(r.list, mode ? `“${list.name}” is being added to Jellyfin as a ${mode === 'collection' ? 'collection' : 'private playlist'}.` : `The Jellyfin ${current === 'playlist' ? 'playlist' : 'collection'} is being removed.`);
+      onClose();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      title="Show in Jellyfin"
+      onClose={onClose}
+      footer={
+        <>
+          <button class="jw-btn jw-btn-plain" onClick={onClose}>
+            Cancel
+          </button>
+          <button class="jw-btn jw-btn-primary" onClick={save} disabled={busy || choice === current}>
+            {busy && <Spinner />} Save
+          </button>
+        </>
+      }
+    >
+      {error && <Banner kind="error">{error}</Banner>}
+      <p class="jw-sub">{MIRROR_INTRO}</p>
+      <div class="jw-form" role="radiogroup" aria-label="Show in Jellyfin">
+        {MIRROR_OPTIONS.map((o) => (
+          <label class={`jw-option jw-radio${choice === o.value ? ' on' : ''}`} key={o.value}>
+            <input type="radio" name="jw-mirror" value={o.value} checked={choice === o.value} onChange={() => setChoice(o.value)} />
+            <span>
+              <span class="jw-option-title">{o.label}</span>
+              <span class="jw-hint">{MIRROR_HINT[o.value]}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </Dialog>
   );
 }
 

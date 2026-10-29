@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Jellyfin.Plugin.JellyWatcher.Configuration;
+using Jellyfin.Plugin.JellyWatcher.Mirrors;
 using Jellyfin.Plugin.JellyWatcher.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -23,10 +24,14 @@ public class JellyWatcherController : ControllerBase
     private const string IsApiKeyClaim = "Jellyfin-IsApiKey";
 
     private readonly JellyWatcherProxy _proxy;
+    private readonly MirrorService _mirrors;
+    private readonly MirrorHostedService _mirrorRunner;
 
-    public JellyWatcherController(JellyWatcherProxy proxy)
+    public JellyWatcherController(JellyWatcherProxy proxy, MirrorService mirrors, MirrorHostedService mirrorRunner)
     {
         _proxy = proxy;
+        _mirrors = mirrors;
+        _mirrorRunner = mirrorRunner;
     }
 
     /// <summary>The Watchlists page script (loaded by jellyfin-web through File Transformation).</summary>
@@ -186,6 +191,50 @@ public class JellyWatcherController : ControllerBase
         using var doc = JsonDocument.Parse(result.Body);
         var version = doc.RootElement.TryGetProperty("version", out var v) ? v.GetString() : null;
         return Ok(new { ok = true, message = $"Connected to JellyWatcher {version}.", version });
+    }
+
+    /// <summary>Updates the collections and playlists now (after someone changed a list's Jellyfin setting).</summary>
+    /// <returns>Whether a run was started.</returns>
+    [HttpPost("Mirrors/Sync")]
+    [Authorize]
+    public ActionResult SyncMirrors()
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (CurrentUser() is null)
+        {
+            return Result(JellyWatcherProxy.Error(403, "plugin_user", "Sign in to Jellyfin with a user account."));
+        }
+
+        var config = Plugin.Instance?.Configuration;
+        if (config is null || !config.MirrorEnabled)
+        {
+            return Ok(new { started = false });
+        }
+
+        _mirrorRunner.RequestRun();
+        return Ok(new { started = true });
+    }
+
+    /// <summary>State of the collection and playlist sync (settings page).</summary>
+    /// <returns>The last run.</returns>
+    [HttpGet("Mirrors/Status")]
+    [Authorize(Policy = "RequiresElevation")]
+    public ActionResult GetMirrorStatus()
+    {
+        Response.Headers.CacheControl = "no-store";
+        var last = _mirrors.LastRun;
+        return Ok(new { running = _mirrors.Running, lastRun = last is null ? null : new { at = last.At, ok = last.Ok, message = last.Message } });
+    }
+
+    /// <summary>Deletes every collection and playlist the plugin made (for example before uninstalling it).</summary>
+    /// <param name="cancellationToken">Cancellation.</param>
+    /// <returns>How many were deleted.</returns>
+    [HttpPost("Mirrors/RemoveAll")]
+    [Authorize(Policy = "RequiresElevation")]
+    public async Task<ActionResult> RemoveAllMirrors(CancellationToken cancellationToken)
+    {
+        var removed = await _mirrors.RemoveAllAsync(cancellationToken).ConfigureAwait(false);
+        return Ok(new { removed });
     }
 
     private static string? ErrorMessage(ProxyResult result)

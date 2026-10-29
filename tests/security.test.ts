@@ -70,6 +70,10 @@ describe('plugin route allowlist', () => {
     expect(pluginRouteFor('PUT', '/api/titles/3/skipped/')).not.toBeNull();
     expect(pluginRouteFor('GET', '/api/images/tmdb/w342/abc.jpg')?.user).toBe(false);
     expect(pluginRouteFor('GET', '/api/images/tmdb/w342/..%2Fetc')).toBeNull();
+    expect(pluginRouteFor('PUT', '/api/lists/12/mirror')?.user).toBe(true);
+    expect(pluginRouteFor('GET', '/api/plugin/mirrors')?.user).toBe(false);
+    expect(pluginRouteFor('POST', '/api/plugin/mirrors/report')?.user).toBe(false);
+    expect(pluginRouteFor('POST', '/api/lists/12/mirror')).toBeNull();
     expect(pluginRouteFor('DELETE', '/api/lists/12')).toBeNull();
     expect(pluginRouteFor('PATCH', '/api/lists/12')).toBeNull();
     expect(pluginRouteFor('GET', '/api/admin/users')).toBeNull();
