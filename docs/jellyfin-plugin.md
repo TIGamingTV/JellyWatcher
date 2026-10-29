@@ -110,6 +110,8 @@ with Jellyfin:
   Let everyone on the Jellyfin server sign in** is on; otherwise the page asks them to contact an
   administrator.
 - Disabled accounts are refused.
+- Everything is per person: each Jellyfin user only sees and changes their own lists, watched and
+  Not Watching marks, and requests go to Seerr as that person's own Seerr user.
 
 ## How it works
 
@@ -139,6 +141,10 @@ JellyWatcher /api/...  ── key checked, account found by Jellyfin user id, ro
   eligibility and requests, Not Watching and Watched, TMDb artwork, and (plugin only, not the page)
   the lists to show in Jellyfin and the plugin's report about them. Everything else, including all administration, answers 403,
   even for administrators. The plugin checks the same list before anything leaves Jellyfin.
+- The person comes only from Jellyfin's own sign-in (never from the browser), and the plugin never
+  keeps cookies, so nothing of one person's requests travels with another's.
+- Jellyfin user ids only count on the Jellyfin server JellyWatcher is connected to: the plugin sends
+  that server's id, and JellyWatcher refuses another server (for example a cloned one) with 403.
 - Requests from the plugin skip the browser CSRF check because they carry no cookie; the key is a
   server-side secret. Rate limits count per person instead of per IP.
 - When JellyWatcher rejects the key, the plugin answers 503 instead of 401, so Jellyfin's web app

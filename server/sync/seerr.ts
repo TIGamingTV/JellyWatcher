@@ -78,11 +78,17 @@ export async function syncSeerrUsers(ctx: AppContext): Promise<number> {
   const users = ctx.db.prepare('SELECT id, jellyfin_user_id, seerr_user_id FROM users').all() as { id: number; jellyfin_user_id: string | null; seerr_user_id: number | null }[];
   let linked = 0;
   const update = ctx.db.prepare('UPDATE users SET seerr_user_id = ?, seerr_username = ?, seerr_permissions = ?, updated_at = ? WHERE id = ?');
+  // A Seerr user is linked to one account at most (requests are credited by Seerr user).
+  const taken = new Set(users.map((u) => u.seerr_user_id).filter((id): id is number => id !== null));
   for (const u of users) {
     let s = u.seerr_user_id !== null ? byId.get(u.seerr_user_id) : undefined;
     if (!s && u.seerr_user_id === null && u.jellyfin_user_id) {
-      s = byJf.get(normId(u.jellyfin_user_id));
-      if (s) linked++;
+      const candidate = byJf.get(normId(u.jellyfin_user_id));
+      if (candidate && !taken.has(candidate.id)) {
+        s = candidate;
+        taken.add(candidate.id);
+        linked++;
+      }
     }
     if (s) update.run(s.id, s.displayName ?? s.jellyfinUsername ?? s.username ?? null, s.permissions ?? null, nowIso(), u.id);
   }
@@ -107,7 +113,7 @@ export function upsertRequest(ctx: AppContext, r: SeerrRequestJson, origin: 'see
   const seerrUserId = r.requestedBy?.id ?? null;
   const userId =
     localUserId ??
-    ((seerrUserId !== null ? ctx.db.prepare('SELECT id FROM users WHERE seerr_user_id = ? LIMIT 1').get(seerrUserId) : undefined) as { id: number } | undefined)?.id ??
+    ((seerrUserId !== null ? ctx.db.prepare('SELECT id FROM users WHERE seerr_user_id = ? ORDER BY id LIMIT 1').get(seerrUserId) : undefined) as { id: number } | undefined)?.id ??
     null;
   const requestedBy = r.requestedBy?.displayName ?? r.requestedBy?.jellyfinUsername ?? r.requestedBy?.username ?? null;
   const mediaStatus = r.is4k ? (media.status4k ?? null) : (media.status ?? null);
