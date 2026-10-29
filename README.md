@@ -149,8 +149,8 @@ npm test         # unit and end-to-end tests against mocked services
 npm run build
 ```
 
-Releases: set `version` in `package.json` and push a matching tag (`git tag v0.4.1 && git push origin
-v0.4.1`). The [release workflow](.github/workflows/release.yml) tests, publishes the multi-arch image
+Releases: set `version` in `package.json` and push a matching tag (`git tag v0.5.0 && git push origin
+v0.5.0`). The [release workflow](.github/workflows/release.yml) tests, publishes the multi-arch image
 to GHCR, creates the GitHub release with the Jellyfin plugin zip and adds the plugin version to
 [`jellyfin-plugin/manifest.json`](jellyfin-plugin/manifest.json). The plugin version is the
 JellyWatcher version plus `.0` (set `<Version>` in the plugin's `.csproj`; CI checks they match).
