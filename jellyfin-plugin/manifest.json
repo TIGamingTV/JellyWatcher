@@ -2,12 +2,20 @@
   {
     "guid": "b3ad8b8e-844c-4e75-ab0c-caa0b5faeff8",
     "name": "JellyWatcher",
-    "description": "Adds a Watchlists page to Jellyfin's menu: add lists by link, follow each list's timeline, and request (Seerr), skip or mark entries as watched without leaving Jellyfin. Needs a JellyWatcher server (https://github.com/TIGamingTV/JellyWatcher) and the File Transformation plugin.",
+    "description": "Adds a Watchlists page to Jellyfin's menu: add lists by link, follow each list's timeline, and request (Seerr), skip or mark entries as watched without leaving Jellyfin. Lists can also be kept in Jellyfin as collections or private playlists in their order, so they show up in every Jellyfin app, including Infuse. Needs a JellyWatcher server (https://github.com/TIGamingTV/JellyWatcher) and the File Transformation plugin.",
     "overview": "Your JellyWatcher watchlists and timelines inside Jellyfin",
     "owner": "TIGamingTV",
     "category": "General",
     "imageUrl": "https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/assets/jellyfin-plugin.png",
     "versions": [
+      {
+        "version": "0.7.0.0",
+        "changelog": "JellyWatcher 0.7.0: https://github.com/TIGamingTV/JellyWatcher/releases/tag/v0.7.0",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/TIGamingTV/JellyWatcher/releases/download/v0.7.0/jellywatcher_0.7.0.0.zip",
+        "checksum": "2570b4ae3444c5f097c93c1d48cbb7cc",
+        "timestamp": "2026-10-29T23:02:25Z"
+      },
       {
         "version": "0.6.0.0",
         "changelog": "JellyWatcher 0.6.0: https://github.com/TIGamingTV/JellyWatcher/releases/tag/v0.6.0",
