@@ -4,10 +4,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Copy, ExternalLink, Eye, EyeOff, RefreshCw, Smartphone } from 'lucide-react';
 import { del, errorText, get, post, put } from '../lib/api';
 import { useRefreshMe, useToast, useUser } from '../lib/session';
-import type { IntegrationView, QuickConnectStart, SourcesResponse, SyncRun, TestResult } from '../lib/types';
+import type { IntegrationView, QuickConnectStart, SourceId, SourcesResponse, SyncRun, TestResult, UploadSource } from '../lib/types';
 import { plural } from '../lib/format';
 import { Banner, CenterLoading, ConfirmSheet, Field, PageHeader, ProviderMark, Spinner, SyncButton, Time, Toggle } from '../components/ui';
-import { AddListSheet, UploadBox, UploadInstructions, useInvalidateLists } from '../components/AddList';
+import { AddListSheet, LinkForm, UploadBox, UploadInstructions, useInvalidateLists } from '../components/AddList';
 import { SERVICE_COPY } from './Integrations';
 import { QuickConnectPanel } from '../components/QuickConnect';
 
@@ -26,7 +26,7 @@ export function IntegrationDetail() {
       {provider === 'tmdb' && <TmdbPage />}
       {provider === 'trakt' && <TraktPage />}
       {provider === 'letterboxd' && <LetterboxdPage />}
-      {provider === 'imdb' && <ImdbPage />}
+      {provider === 'imdb' && <SourcePage id="imdb" />}
     </>
   );
 }
@@ -726,10 +726,17 @@ function LetterboxdPage() {
 
   return (
     <>
-      <Header provider="letterboxd" title="Letterboxd" subtitle="Import your watchlist and lists from a Letterboxd export." />
-      <Banner kind="info" title="Why uploads instead of sign-in?">
-        Letterboxd doesn’t grant API access to personal or self-hosted projects, and its terms don’t allow scraping. Exports you download yourself are the supported way in. Other members’ lists can’t be imported.
+      <Header provider="letterboxd" title="Letterboxd" subtitle="Add public lists by link, import your export, and sync your diary." />
+      <Banner kind="info" title="No sign-in needed">
+        Letterboxd doesn’t grant API access to personal or self-hosted projects. Public lists and watchlists are added by their link and read from the public page; private lists and your full history come from an export you download yourself.
       </Banner>
+      {desc?.link && (
+        <Section title="Add a List by Link">
+          <div className="form-stack">
+            <LinkForm placeholder={desc.link.example} hint={desc.link.hint} />
+          </div>
+        </Section>
+      )}
       <Section title="Upload an Export">
         <div className="form-stack">
           <UploadInstructions provider="letterboxd" />
@@ -780,30 +787,57 @@ function LetterboxdPage() {
   );
 }
 
-function ImdbPage() {
-  const sources = useQuery({ queryKey: ['sources'], queryFn: () => get<SourcesResponse>('/sources') });
-  const desc = sources.data?.sources.find((s) => s.id === 'imdb');
+/** Route /integrations/sources/:source — link and file import for one watchlist source. */
+export function SourceDetail() {
+  const id = useParams().source ?? '';
+  if (!['imdb', 'tmdb', 'myanimelist', 'anilist', 'simkl', 'mdblist'].includes(id)) return <Navigate to="/integrations" replace />;
   return (
     <>
-      <Header provider="imdb" title="IMDb" subtitle="Import your IMDb watchlist, lists and ratings from IMDb’s CSV export." />
-      <Banner kind="info" title="Why uploads?">
-        IMDb has no API for personal lists and blocks automated access. Upload the file from IMDb’s Export button; upload a new one to update. IMDb IDs in the file match titles exactly.
-      </Banner>
-      <Section title="Upload an Export">
-        <div className="form-stack">
-          <UploadInstructions provider="imdb" />
-          <UploadBox provider="imdb" />
-        </div>
-      </Section>
-      {desc && (
-        <Section title="Limitations">
-          {desc.limitations.map((l) => (
-            <div key={l} className="row subhead">
-              {l}
-            </div>
-          ))}
+      <Link to="/integrations" className="back-link">
+        <ChevronLeft size={18} aria-hidden /> Integrations
+      </Link>
+      <SourcePage id={id as SourceId} />
+    </>
+  );
+}
+
+function SourcePage({ id }: { id: SourceId }) {
+  const { isAdmin } = useUser();
+  const sources = useQuery({ queryKey: ['sources'], queryFn: () => get<SourcesResponse>('/sources') });
+  if (sources.isLoading) return <CenterLoading />;
+  const desc = sources.data?.sources.find((s) => s.id === id);
+  if (!desc) return <Navigate to="/integrations" replace />;
+  return (
+    <>
+      <Header provider={id} title={desc.name} subtitle={desc.summary} />
+      {desc.link && (
+        <Section title="Add a List by Link" footer={desc.linkReady ? undefined : desc.limitations[0]}>
+          <div className="form-stack">
+            {desc.linkReady ? (
+              <LinkForm placeholder={desc.link.example} hint={desc.link.hint} />
+            ) : (
+              <Banner kind="warn" action={isAdmin ? <Link className="btn btn-small" to="/integrations/tmdb">Set Up</Link> : undefined}>
+                Links need a server connection that isn’t set up yet.
+              </Banner>
+            )}
+          </div>
         </Section>
       )}
+      {desc.upload && (
+        <Section title={desc.link ? 'Or Import a File' : 'Import a File'}>
+          <div className="form-stack">
+            <UploadInstructions provider={id as UploadSource} />
+            <UploadBox provider={id as UploadSource} />
+          </div>
+        </Section>
+      )}
+      <Section title="Limitations">
+        {desc.limitations.map((l) => (
+          <div key={l} className="row subhead">
+            {l}
+          </div>
+        ))}
+      </Section>
     </>
   );
 }

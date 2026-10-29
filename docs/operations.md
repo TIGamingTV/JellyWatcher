@@ -86,8 +86,11 @@ your SSO or VPN. Leave *Create accounts automatically* off unless every Jellyfin
 ## Networking
 
 JellyWatcher reaches Jellyfin, Seerr, TMDb (`api.themoviedb.org`, `image.tmdb.org`), Trakt
-(`api.trakt.tv`, `auth.trakt.tv`) and Letterboxd (`letterboxd.com`, RSS only). No inbound ports are
-needed except the web port, plus the webhooks if you use them.
+(`api.trakt.tv`, `auth.trakt.tv`), and, for the lists you add, Letterboxd (`letterboxd.com`, `boxd.it`),
+IMDb (`api.graphql.imdb.com`), MyAnimeList (`myanimelist.net`), AniList (`graphql.anilist.co`) and
+MDBList (`mdblist.com`). Anime lists also download the id mapping from `raw.githubusercontent.com`
+(cached in `data/cache/`). No inbound ports are needed except the web port, plus the webhooks if you
+use them.
 
 | Where the services run | Server URL to use |
 | --- | --- |
@@ -109,6 +112,8 @@ needed except the web port, plus the webhooks if you use them.
 | Trakt: "sign-in expired" | Refresh tokens are single use and can be invalidated by Trakt. Reconnect in Integrations › Trakt. |
 | Trakt app stopped working | Trakt deletes apps unused for 30 days. Create a new one and paste the new Client ID. |
 | Letterboxd RSS: "refused the RSS request" | Letterboxd challenged the request. It is retried on the next sync. Uploads are unaffected. |
+| Letterboxd link: "challenging automated traffic" | Letterboxd showed a bot check instead of the list. The list keeps its last entries and is retried on the next sync; uploads are unaffected. |
+| Anime matched by title instead of as seasons | The id mapping could not be downloaded from GitHub. It is retried after an hour; sync the list again afterwards. |
 | Titles stuck in "Needs Review" | Expected for exports without IDs when the title is ambiguous. Pick the right match once; it's remembered. If matching never starts, connect TMDb or Seerr. |
 | Status shows "Possibly outdated" | The last sync of that service failed or is overdue. Check Settings › Sync › History for the error. |
 | Stored credentials disappeared after moving the data | `secret.key` or `JW_SECRET_KEY` changed. Restore the original key or re-enter the credentials. |

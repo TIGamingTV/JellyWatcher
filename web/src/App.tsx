@@ -14,6 +14,7 @@ const RequestsPage = lazy(() => import('./pages/Requests').then((m) => ({ defaul
 const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default: m.LibraryPage })));
 const IntegrationsPage = lazy(() => import('./pages/Integrations').then((m) => ({ default: m.IntegrationsPage })));
 const IntegrationDetail = lazy(() => import('./pages/IntegrationDetail').then((m) => ({ default: m.IntegrationDetail })));
+const SourceDetail = lazy(() => import('./pages/IntegrationDetail').then((m) => ({ default: m.SourceDetail })));
 const SettingsPage = lazy(() => import('./pages/Settings').then((m) => ({ default: m.SettingsPage })));
 
 export function App() {
@@ -45,6 +46,7 @@ export function App() {
         <Route path="library" element={<LibraryPage />} />
         <Route path="integrations" element={<IntegrationsPage />} />
         <Route path="integrations/:provider" element={<IntegrationDetail />} />
+        <Route path="integrations/sources/:source" element={<SourceDetail />} />
         <Route path="settings/*" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

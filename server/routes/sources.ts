@@ -2,16 +2,23 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { AppDeps } from '../app.js';
 import type { AppContext } from '../context.js';
+import type { AnimeIds } from '../providers/anime.js';
 import { ApiError, ProviderError } from '../http/errors.js';
 import { IdParam, parse } from '../http/validate.js';
-import { ImdbClient, parseImdbCsv, parseImdbListUrl } from '../providers/imdb.js';
-import { LETTERBOXD_USERNAME, LetterboxdRssClient, UploadError, parseLetterboxdCsv, parseLetterboxdZip } from '../providers/letterboxd.js';
-import { listInfoFromJson, parseTraktListUrl } from '../providers/trakt.js';
+import { AnilistClient, parseAnilistUrl } from '../providers/anilist.js';
 import { decodeText } from '../providers/csv.js';
-import { SOURCE_DESCRIPTORS, type ListFetchResult, type SourceListInfo } from '../providers/types.js';
+import { parseIdCsv } from '../providers/generic.js';
+import { ImdbClient, parseImdbCsv, parseImdbListUrl } from '../providers/imdb.js';
+import { LETTERBOXD_USERNAME, LetterboxdRssClient, LetterboxdWebClient, UploadError, parseLetterboxdCsv, parseLetterboxdUrl, parseLetterboxdZip } from '../providers/letterboxd.js';
+import { MdblistClient, parseMdblistUrl } from '../providers/mdblist.js';
+import { MalClient, parseMalExport, parseMalListUrl } from '../providers/myanimelist.js';
+import { parseSimklExport } from '../providers/simkl.js';
+import { parseTmdbListUrl } from '../providers/tmdb.js';
+import { listInfoFromJson, parseTraktListUrl } from '../providers/trakt.js';
+import { SOURCE_DESCRIPTORS, UPLOAD_SOURCES, type ListFetchResult, type SourceListInfo, type UploadSource } from '../providers/types.js';
 import { requireUser, type SessionUser } from '../security/auth.js';
 import { isTimeline, LOCAL_PROVIDER, type ListRow } from '../services/lists.js';
-import { buildTimelines, type TimelineSummary } from '../services/timeline.js';
+import { autoOrder, buildTimelines, entryReleaseDates, type TimelineSummary } from '../services/timeline.js';
 import { syncList, type TraktListRef } from '../sync/lists.js';
 import { triggerJob } from '../sync/scheduler.js';
 
@@ -58,6 +65,47 @@ export function listView(ctx: AppContext, l: ListRow, summary?: TimelineSummary)
   };
 }
 
+const PROVIDER_LABEL: Record<string, string> = Object.fromEntries(SOURCE_DESCRIPTORS.map((d) => [d.id, d.name]));
+
+/** Parses an uploaded export into one or more lists. Throws UploadError for unusable files. */
+export function parseUpload(provider: UploadSource, filename: string, data: Uint8Array, baseName: string, name: string | undefined, anime: AnimeIds | null = null): ListFetchResult[] {
+  const lower = filename.toLowerCase();
+  const text = () => decodeText(data);
+  switch (provider) {
+    case 'letterboxd': {
+      if (lower.endsWith('.zip')) return parseLetterboxdZip(data);
+      if (!lower.endsWith('.csv')) throw new UploadError('Upload the Letterboxd export ZIP or a list CSV.');
+      const r = parseLetterboxdCsv(text(), name || baseName);
+      if (/^watchlist$/i.test(baseName)) r.info = { ...r.info, externalId: 'watchlist', name: 'Letterboxd Watchlist', kind: 'watchlist' };
+      return [r];
+    }
+    case 'imdb': {
+      if (!lower.endsWith('.csv')) throw new UploadError('Upload the CSV file from IMDb’s Export button.');
+      const isWatchlist = /watchlist/i.test(baseName);
+      const r = parseImdbCsv(text(), name || (isWatchlist ? 'IMDb Watchlist' : baseName));
+      if (isWatchlist && !name) r.info = { ...r.info, externalId: 'watchlist', kind: 'watchlist' };
+      return [r];
+    }
+    case 'myanimelist':
+    case 'anilist':
+      if (!/\.(xml|gz)$/.test(lower)) throw new UploadError('Upload the anime list export as .xml or .xml.gz.');
+      return parseMalExport(data, provider, anime);
+    case 'simkl':
+      return parseSimklExport(filename, data, anime);
+    case 'tmdb':
+    case 'mdblist': {
+      if (!lower.endsWith('.csv')) throw new UploadError('Upload a CSV file.');
+      const source = provider === 'tmdb' ? 'TMDb' : 'MDBList';
+      return parseIdCsv(text(), {
+        source,
+        fallbackName: name || baseName,
+        anime,
+        urlFor: ({ tmdbId, mediaType, imdbId }) => (tmdbId && mediaType ? `https://www.themoviedb.org/${mediaType}/${tmdbId}` : imdbId ? `https://www.imdb.com/title/${imdbId}/` : null),
+      });
+    }
+  }
+}
+
 async function runListSync(ctx: AppContext, list: ListRow) {
   const res = await ctx.jobs.run('lists', 'manual', async () => ({ stats: { ...(await syncList(ctx, list)) } }), `list:${list.id}`);
   void triggerJob(ctx, 'match', 'event');
@@ -84,6 +132,8 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
       sources: SOURCE_DESCRIPTORS.map((d) => ({
         ...d,
         available: d.id !== 'trakt' || ctx.integrations.isReady('trakt'),
+        /** Whether links can be added right now (Trakt and TMDb need a server integration). */
+        linkReady: d.link !== null && (d.id === 'trakt' ? ctx.integrations.isReady('trakt') : d.id === 'tmdb' ? ctx.integrations.isReady('tmdb') : true),
         connection: d.id === 'trakt' ? ctx.connections.view(trakt) : d.id === 'letterboxd' ? ctx.connections.view(letterboxd) : null,
         listCount: listCount[d.id] ?? 0,
       })),
@@ -230,24 +280,32 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
     return importAndSync(u, info, ref, conn?.id);
   }
 
+  /**
+   * Adds (or refreshes) a list read from a public link. The list syncs automatically from then on;
+   * lists first imported from a file become syncable once added by link.
+   */
+  async function importFetched(u: SessionUser, provider: string, fetch: () => Promise<ListFetchResult>, sourceRef: Record<string, unknown>) {
+    let result: ListFetchResult;
+    try {
+      result = await fetch();
+    } catch (err) {
+      if (err instanceof ProviderError && (err.kind === 'not_found' || err.kind === 'forbidden')) throw new ApiError(404, 'list_not_found', err.message);
+      if (err instanceof ProviderError && (err.kind === 'config' || err.kind === 'bad_request')) throw new ApiError(400, 'invalid_list', err.message);
+      throw err;
+    }
+    const id = ctx.lists.upsert(u.id, provider, result.info, { sourceRef });
+    ctx.db.prepare('UPDATE lists SET auto_sync = CASE WHEN sync_supported = 0 THEN 1 ELSE auto_sync END, sync_supported = 1 WHERE id = ?').run(id);
+    ctx.lists.applyItems(id, result);
+    ctx.activity.add(u.id, 'list_imported', `Imported the ${PROVIDER_LABEL[provider] ?? provider} list “${result.info.name}”.`);
+    void triggerJob(ctx, 'match', 'event');
+    return { list: listView(ctx, ctx.lists.get(id)!) };
+  }
+
   // ---- IMDb public lists by link (no account or key) -------------------------------------
   async function importImdb(u: SessionUser, url: string) {
     const listId = parseImdbListUrl(url);
     if (!listId) throw new ApiError(400, 'invalid_url', 'Paste an IMDb list link, like https://www.imdb.com/list/ls020816781/.');
-    let result: ListFetchResult;
-    try {
-      result = await new ImdbClient().list(listId);
-    } catch (err) {
-      if (err instanceof ProviderError && (err.kind === 'not_found' || err.kind === 'forbidden')) throw new ApiError(404, 'list_not_found', err.message);
-      throw err;
-    }
-    const id = ctx.lists.upsert(u.id, 'imdb', result.info, { sourceRef: { mode: 'graphql', listId } });
-    // Lists first imported from a CSV become syncable once added by link.
-    ctx.db.prepare('UPDATE lists SET sync_supported = 1 WHERE id = ?').run(id);
-    ctx.lists.applyItems(id, result);
-    ctx.activity.add(u.id, 'list_imported', `Imported the IMDb list “${result.info.name}”.`);
-    void triggerJob(ctx, 'match', 'event');
-    return { list: listView(ctx, ctx.lists.get(id)!) };
+    return importFetched(u, 'imdb', () => new ImdbClient().list(listId), { mode: 'graphql', listId });
   }
 
   app.post('/lists/imdb', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req) => {
@@ -256,13 +314,55 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
     return importImdb(u, body.url);
   });
 
-  /** One field for any supported link: IMDb lists and Trakt lists or watchlists. */
+  /** One field for every supported link: IMDb, Trakt, Letterboxd, TMDb, MyAnimeList, AniList and MDBList. */
   app.post('/lists/link', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req) => {
     const u = requireUser(req);
     const body = parse(z.object({ url: z.string().trim().min(4).max(500) }), req.body);
-    if (parseImdbListUrl(body.url)) return importImdb(u, body.url);
-    if (parseTraktListUrl(body.url)) return importTrakt(u, { mode: 'url', url: body.url });
-    throw new ApiError(400, 'invalid_url', 'Paste a link to a public IMDb list (imdb.com/list/ls…) or a Trakt list (trakt.tv/users/…/lists/…).');
+    const url = body.url;
+    if (parseImdbListUrl(url)) return importImdb(u, url);
+    if (parseTraktListUrl(url)) return importTrakt(u, { mode: 'url', url });
+
+    let lb = parseLetterboxdUrl(url);
+    if (lb === 'short') {
+      lb = await new LetterboxdWebClient().resolveShort(url).catch(() => null);
+      if (!lb) throw new ApiError(400, 'invalid_url', 'That boxd.it link does not point to a Letterboxd list or watchlist.');
+    }
+    if (lb) {
+      const ref = lb;
+      const own = ctx.connections.get(u.id, 'letterboxd')?.accountName;
+      return importFetched(u, 'letterboxd', () => new LetterboxdWebClient().list(ref, own), { mode: 'web', user: ref.user, slug: ref.slug });
+    }
+
+    const tmdbList = parseTmdbListUrl(url);
+    if (tmdbList) {
+      const tmdb = ctx.integrations.tmdb();
+      if (!tmdb) throw new ApiError(400, 'tmdb_not_configured', 'TMDb lists need the TMDb API token. An administrator can add it in Integrations › TMDb.');
+      return importFetched(u, 'tmdb', () => tmdb.list(tmdbList), { mode: 'api', listId: tmdbList });
+    }
+
+    const mal = parseMalListUrl(url);
+    if (mal) {
+      await ctx.animeIds.load();
+      return importFetched(u, 'myanimelist', () => new MalClient().list(mal.user, mal.status, ctx.animeIds), { mode: 'web', user: mal.user, status: mal.status });
+    }
+
+    const anilist = parseAnilistUrl(url);
+    if (anilist) {
+      await ctx.animeIds.load();
+      return importFetched(u, 'anilist', () => new AnilistClient().list(anilist.user, anilist.list, ctx.animeIds), { mode: 'api', user: anilist.user, list: anilist.list });
+    }
+
+    const mdb = parseMdblistUrl(url);
+    if (mdb) return importFetched(u, 'mdblist', () => new MdblistClient().list(mdb.user, mdb.slug), { mode: 'json', user: mdb.user, slug: mdb.slug });
+
+    if (/^https?:\/\/([a-z0-9-]+\.)?simkl\.com\//i.test(url)) {
+      throw new ApiError(400, 'invalid_url', 'Simkl shares lists only with apps you sign in to, so Simkl links can’t be read. Upload your Simkl export instead.');
+    }
+    throw new ApiError(
+      400,
+      'invalid_url',
+      'That link isn’t a supported list. Paste a public list from IMDb, Trakt, Letterboxd, TMDb, MyAnimeList, AniList or MDBList.',
+    );
   });
 
   async function importAndSync(u: SessionUser, info: SourceListInfo, ref: TraktListRef, connectionId?: number) {
@@ -368,7 +468,7 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
     return { ok: true };
   });
 
-  // ---- Uploads (Letterboxd / IMDb exports) ----------------------------------------------
+  // ---- Uploads (exports from every source that has one) ---------------------------------
   app.post('/lists/upload', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req) => {
     const u = requireUser(req);
     const fields: Record<string, string> = {};
@@ -380,29 +480,16 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
       } else fields[part.fieldname] = String(part.value).slice(0, 200);
     }
     const meta = parse(
-      z.object({ provider: z.enum(['letterboxd', 'imdb']), name: z.string().trim().max(120).optional(), replaceListId: z.coerce.number().int().positive().optional() }),
+      z.object({ provider: z.enum(UPLOAD_SOURCES), name: z.string().trim().max(120).optional(), replaceListId: z.coerce.number().int().positive().optional() }),
       fields,
     );
     if (!file || file.data.length === 0) throw new ApiError(400, 'no_file', 'Choose a file to upload.');
-    const lower = file.filename.toLowerCase();
-    const baseName = file.filename.replace(/\.(csv|zip)$/i, '').replace(/[-_]+/g, ' ').trim() || 'Imported list';
+    const baseName = file.filename.replace(/\.(csv|zip|json|xml|gz)$/gi, '').replace(/[-_]+/g, ' ').trim() || 'Imported list';
 
     let results: ListFetchResult[];
     try {
-      if (meta.provider === 'letterboxd') {
-        if (lower.endsWith('.zip')) results = parseLetterboxdZip(file.data);
-        else if (lower.endsWith('.csv')) {
-          const r = parseLetterboxdCsv(decodeText(file.data), meta.name || baseName);
-          if (/^watchlist$/i.test(baseName)) r.info = { ...r.info, externalId: 'watchlist', name: 'Letterboxd Watchlist', kind: 'watchlist' };
-          results = [r];
-        } else throw new UploadError('Upload the Letterboxd export ZIP or a list CSV.');
-      } else {
-        if (!lower.endsWith('.csv')) throw new UploadError('Upload the CSV file from IMDb’s Export button.');
-        const isWatchlist = /watchlist/i.test(baseName);
-        const r = parseImdbCsv(decodeText(file.data), meta.name || (isWatchlist ? 'IMDb Watchlist' : baseName));
-        if (isWatchlist && !meta.name) r.info = { ...r.info, externalId: 'watchlist', kind: 'watchlist' };
-        results = [r];
-      }
+      if (['myanimelist', 'anilist', 'simkl'].includes(meta.provider)) await ctx.animeIds.load();
+      results = parseUpload(meta.provider, file.filename, file.data, baseName, meta.name, ctx.animeIds);
     } catch (err) {
       if (err instanceof UploadError) throw new ApiError(400, 'invalid_file', err.message);
       throw err;
@@ -412,8 +499,10 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
     if (meta.replaceListId) {
       const target = ctx.lists.getOwned(meta.replaceListId, u.id);
       if (!target || target.provider !== meta.provider) throw new ApiError(404, 'not_found', 'List not found.');
-      if (results.length !== 1) throw new ApiError(400, 'ambiguous', 'To update one list, upload that list’s CSV rather than the full export.');
-      const applied = ctx.lists.applyItems(target.id, results[0]!);
+      // A full export holds several lists: use the one this list came from.
+      const match = results.length === 1 ? results[0] : results.find((r) => r.info.externalId === target.external_id);
+      if (!match) throw new ApiError(400, 'ambiguous', 'To update one list, upload that list’s own file rather than the full export.');
+      const applied = ctx.lists.applyItems(target.id, match);
       lists.push({ ...listView(ctx, ctx.lists.get(target.id)!), applied });
     } else {
       for (const r of results) {
@@ -421,7 +510,7 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
         const applied = ctx.lists.applyItems(id, r);
         lists.push({ ...listView(ctx, ctx.lists.get(id)!), applied });
       }
-      ctx.activity.add(u.id, 'list_imported', `Imported ${results.length === 1 ? `“${results[0]!.info.name}”` : `${results.length} lists`} from ${meta.provider === 'imdb' ? 'IMDb' : 'Letterboxd'}.`);
+      ctx.activity.add(u.id, 'list_imported', `Imported ${results.length === 1 ? `“${results[0]!.info.name}”` : `${results.length} lists`} from ${PROVIDER_LABEL[meta.provider]}.`);
     }
     void triggerJob(ctx, 'match', 'event');
     return { lists };
@@ -526,6 +615,22 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
     ownedList(u.id, id);
     ctx.lists.resetOrder(id);
     return { list: listView(ctx, ctx.lists.get(id)!) };
+  });
+
+  /**
+   * Sorts the list automatically and saves it as the person's order: release order (a timeline for
+   * lists without an order of their own), newest first, title or runtime. Can be adjusted by hand.
+   */
+  app.post('/lists/:id/order/auto', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    const body = parse(z.object({ by: z.enum(['release', 'release_desc', 'title', 'runtime']).default('release') }), req.body ?? {});
+    const l = ownedList(u.id, id);
+    const t = buildTimelines(ctx, u, [l]).get(l.id)!;
+    const dates = entryReleaseDates(ctx, t.entries);
+    const ordered = ctx.lists.setOrder(id, autoOrder(t.entries, body.by, dates));
+    const unknown = body.by.startsWith('release') ? [...dates.values()].filter((d) => d === null).length : 0;
+    return { ordered, withoutDate: unknown, list: listView(ctx, ctx.lists.get(id)!) };
   });
 
   app.post('/lists/:id/items', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req) => {

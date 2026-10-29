@@ -31,11 +31,15 @@ response validation (zod, tolerant of missing fields) and quirks:
 | Adapter | Responsibility |
 | --- | --- |
 | `trakt.ts` | Device-code OAuth on `auth.trakt.tv`, paginated list and watchlist reads (movies, shows, seasons, episodes in rank order), list search and discovery, list URL parsing. |
-| `letterboxd.ts` | Parsing the export ZIP and list CSVs, and RSS diary parsing. No scraping. |
+| `letterboxd.ts` | Public list and watchlist pages by link (every page, in order; `boxd.it` short links), the export ZIP and list CSVs, and RSS diary parsing. |
 | `imdb.ts` | Public list reads through IMDb's GraphQL endpoint (list order, episodes), list URL parsing, CSV exports with column aliases. |
+| `myanimelist.ts`, `anilist.ts` | Public anime lists by link (MyAnimeList's list JSON, AniList's GraphQL API) and the MyAnimeList XML export. |
+| `mdblist.ts` | Public MDBList lists through their `/json` feed (TMDb ids, list order). |
+| `simkl.ts`, `generic.ts` | Simkl exports (CSV, JSON, ZIP) and a tolerant id-based CSV reader (TMDb, MDBList, Simkl…) that splits files by watch status. |
+| `anime.ts` | MyAnimeList / AniList / Simkl ids → TMDb show + season or movie, from the cached Fribb/anime-lists mapping. |
 | `seerr.ts` | Status, users, search, details, request creation with `X-API-User`, request and media listing. |
 | `jellyfin.ts` | `MediaBrowser` auth header, credential verification, paginated library and user data, series episodes, images. |
-| `tmdb.ts` | Find by external id, search, details (runtime, season and episode counts). |
+| `tmdb.ts` | Find by external id, search, details (runtime, season and episode counts, season air dates), public lists (API v4). |
 
 `services/metadata.ts` abstracts *metadata*. It uses TMDb when a token is configured, and otherwise
 Seerr's TMDb proxy, so a TMDb key is optional.
@@ -43,7 +47,8 @@ Seerr's TMDb proxy, so a TMDb key is optional.
 `services/timeline.ts` turns a list into ordered entries (movie, show, season or episode), each with
 its episode count, runtime and watched share, plus list totals. Runtimes come from metadata, then the
 source, then Jellyfin. It feeds timeline views and Home's *Up Next* (the first unwatched entry of
-each list).
+each list that isn't marked *Not Watching*). It also sorts lists automatically (release date, newest
+first, title, runtime); the result is saved as the person's order.
 
 Adding a source means writing an adapter that produces `SourceItem[]` and registering how its lists
 are fetched in `sync/lists.ts`. Matching, dedup, status and UI then work unchanged.
@@ -60,6 +65,7 @@ are fetched in `sync/lists.ts`. Matching, dedup, status and UI then work unchang
 | `match_resolutions` | Manual match decisions keyed by a source fingerprint, reused on re-import. |
 | `jellyfin_items`, `jellyfin_user_data`, `jellyfin_episodes` | Library index, per-Jellyfin-user viewing state, and episodes of listed series. |
 | `watch_history`, `watched_episodes` | Per-person viewing state that outlives the library, so deleted titles stay watched. |
+| `manual_watches`, `skipped_entries` | The person's own watched marks (with dates) and *Not Watching* marks, per title, season or episode. |
 | `seerr_media`, `requests` | Mirror of Seerr media status and requests. |
 | `sync_runs`, `activity` | Job history and the Home activity feed. |
 
@@ -68,7 +74,7 @@ are fetched in `sync/lists.ts`. Matching, dedup, status and UI then work unchang
 Order of precedence (in `services/matcher.ts`):
 
 1. A stored manual decision for the entry's fingerprint.
-2. A TMDb id from the source (Trakt, Letterboxd RSS). This match is exact.
+2. A TMDb id from the source (Trakt, TMDb, MDBList, Letterboxd RSS, anime via the id mapping). This match is exact.
 3. An IMDb id: found locally, or resolved via `/find` or Seerr `imdb:`. This match is exact.
 4. A TVDB id (shows).
 5. Title + year search.

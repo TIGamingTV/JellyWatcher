@@ -3,8 +3,8 @@ import { Link } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Heart, Link2, Plus, Search, Upload } from 'lucide-react';
 import { api, errorText, get, post, qs } from '../lib/api';
-import { useToast } from '../lib/session';
-import type { ListView, SourcesResponse, TraktListInfo } from '../lib/types';
+import { useToast, useUser } from '../lib/session';
+import type { ListView, SourceDescriptor, SourceId, SourcesResponse, TraktListInfo, UploadSource } from '../lib/types';
 import { plural } from '../lib/format';
 import { Banner, ProviderMark, Segmented, Sheet, Spinner } from './ui';
 
@@ -16,7 +16,16 @@ export function useInvalidateLists() {
 }
 
 /** File upload for Letterboxd / IMDb exports. `replaceListId` updates one existing list. */
-export function UploadBox({ provider, replaceListId, onDone }: { provider: 'letterboxd' | 'imdb'; replaceListId?: number; onDone?: (lists: (ListView & { applied: { added: number; removed: number; total: number; skipped: number } })[]) => void }) {
+/** Renders **bold** in source instructions. */
+export function rich(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) => (part.startsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part));
+}
+
+function useDescriptor(id: SourceId): SourceDescriptor | undefined {
+  return useUser().sources.find((s) => s.id === id);
+}
+
+export function UploadBox({ provider, replaceListId, onDone }: { provider: UploadSource; replaceListId?: number; onDone?: (lists: (ListView & { applied: { added: number; removed: number; total: number; skipped: number } })[]) => void }) {
   const input = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -24,7 +33,9 @@ export function UploadBox({ provider, replaceListId, onDone }: { provider: 'lett
   const [result, setResult] = useState<string | null>(null);
   const toast = useToast();
   const invalidate = useInvalidateLists();
-  const accept = provider === 'letterboxd' ? '.zip,.csv' : '.csv';
+  const desc = useDescriptor(provider);
+  const accept = desc?.upload?.accept ?? '.csv';
+  const label = desc?.upload?.label ?? 'Export file';
 
   const upload = async (file: File) => {
     setBusy(true);
@@ -55,7 +66,7 @@ export function UploadBox({ provider, replaceListId, onDone }: { provider: 'lett
         className={`dropzone${drag ? ' drag' : ''}`}
         role="button"
         tabIndex={0}
-        aria-label={`Choose a ${provider === 'letterboxd' ? 'Letterboxd ZIP or CSV' : 'IMDb CSV'} file to upload`}
+        aria-label={`Choose a file to upload: ${label}`}
         onClick={() => input.current?.click()}
         onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), input.current?.click())}
         onDragOver={(e) => {
@@ -72,7 +83,7 @@ export function UploadBox({ provider, replaceListId, onDone }: { provider: 'lett
       >
         {busy ? <Spinner large label="Uploading" /> : <Upload size={26} aria-hidden style={{ margin: '0 auto 8px' }} />}
         <div style={{ fontWeight: 600 }}>{busy ? 'Importing…' : 'Drop a file here or click to choose'}</div>
-        <div className="footnote">{provider === 'letterboxd' ? 'Letterboxd export ZIP, or a single list CSV' : 'CSV from IMDb’s Export button'}</div>
+        <div className="footnote">{label}</div>
       </div>
       <input ref={input} type="file" accept={accept} hidden onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])} />
       {error && <Banner kind="error">{error}</Banner>}
@@ -81,29 +92,19 @@ export function UploadBox({ provider, replaceListId, onDone }: { provider: 'lett
   );
 }
 
-export function UploadInstructions({ provider }: { provider: 'letterboxd' | 'imdb' }) {
-  return provider === 'letterboxd' ? (
+export function UploadInstructions({ provider }: { provider: UploadSource }) {
+  const desc = useDescriptor(provider);
+  if (!desc?.upload) return null;
+  return (
     <ol className="subhead secondary" style={{ paddingLeft: 18, margin: 0 }}>
-      <li>
-        On letterboxd.com open <strong>Settings › Data › Export Your Data</strong> to download a ZIP. It includes your watchlist and every list.
-      </li>
-      <li>Or open one of your lists and choose <strong>Export</strong> for a single CSV.</li>
-      <li>Upload it here. Upload a newer export later to update the lists.</li>
-    </ol>
-  ) : (
-    <ol className="subhead secondary" style={{ paddingLeft: 18, margin: 0 }}>
-      <li>
-        Sign in on imdb.com and open your <strong>Watchlist</strong> or a list.
-      </li>
-      <li>
-        Choose the <strong>Export</strong> icon (top right). IMDb may prepare the file under <strong>Your exports</strong> first.
-      </li>
-      <li>Upload the downloaded CSV here. Files named “watchlist” become your IMDb Watchlist; others keep their file name.</li>
+      {desc.upload.steps.map((step) => (
+        <li key={step}>{rich(step)}</li>
+      ))}
     </ol>
   );
 }
 
-/** Adds a list from a shared link (public IMDb lists, Trakt lists and watchlists). */
+/** Adds a list from a shared link (any supported source; the server recognises the link). */
 export function LinkForm({ hint, placeholder, onAdded }: { hint?: string; placeholder?: string; onAdded?: (l: ListView) => void }) {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
@@ -137,13 +138,15 @@ export function LinkForm({ hint, placeholder, onAdded }: { hint?: string; placeh
       <label className="field">
         <span className="field-label">List link</span>
         <div className="inline" style={{ flexWrap: 'nowrap' }}>
-          <input className="input" type="url" inputMode="url" placeholder={placeholder ?? 'https://www.imdb.com/list/ls… or https://trakt.tv/users/…/lists/…'} value={url} onChange={(e) => setUrl(e.target.value)} />
+          <input className="input" type="url" inputMode="url" placeholder={placeholder ?? 'https://letterboxd.com/…/list/…, https://trakt.tv/users/…/lists/…, …'} value={url} onChange={(e) => setUrl(e.target.value)} />
           <button className="btn btn-primary" type="submit" disabled={!url.trim() || busy}>
             {busy ? <Spinner /> : <Link2 size={15} aria-hidden />}
             Add
           </button>
         </div>
-        <span className="field-hint">{hint ?? 'Paste a shared link to a public IMDb or Trakt list. No sign-in needed; the list keeps its order and syncs automatically.'}</span>
+        <span className="field-hint">
+          {hint ?? 'Paste a shared link to a public list from IMDb, Trakt, Letterboxd, TMDb, MyAnimeList, AniList or MDBList. No sign-in needed; the list keeps its order and syncs automatically.'}
+        </span>
       </label>
       {error && <Banner kind="error">{error}</Banner>}
     </form>
@@ -309,8 +312,35 @@ function TraktPanel({ sources, onAdded }: { sources: SourcesResponse; onAdded: (
   );
 }
 
-export function AddListSheet({ open, onClose, initial }: { open: boolean; onClose: () => void; initial?: 'trakt' | 'letterboxd' | 'imdb' }) {
-  const [provider, setProvider] = useState<'trakt' | 'letterboxd' | 'imdb' | null>(initial ?? null);
+/** Link and file import for every source except Trakt (which has its own panel). */
+function SourcePanel({ source }: { source: SourcesResponse['sources'][number] }) {
+  return (
+    <>
+      {source.link &&
+        (source.linkReady ? (
+          <LinkForm placeholder={source.link.example} hint={source.link.hint} />
+        ) : (
+          <Banner kind="warn" title={`${source.name} links need a server connection`}>
+            {source.limitations[0]}
+          </Banner>
+        ))}
+      {source.upload && (
+        <>
+          {source.link && (
+            <div className="group-title" style={{ margin: '0 4px -12px' }}>
+              Or import a file
+            </div>
+          )}
+          <UploadInstructions provider={source.id as UploadSource} />
+          <UploadBox provider={source.id as UploadSource} />
+        </>
+      )}
+    </>
+  );
+}
+
+export function AddListSheet({ open, onClose, initial }: { open: boolean; onClose: () => void; initial?: SourceId }) {
+  const [provider, setProvider] = useState<SourceId | null>(initial ?? null);
   const sources = useQuery({ queryKey: ['sources'], queryFn: () => get<SourcesResponse>('/sources'), enabled: open });
   const close = () => {
     setProvider(initial ?? null);
@@ -324,23 +354,25 @@ export function AddListSheet({ open, onClose, initial }: { open: boolean; onClos
         <Spinner />
       ) : !provider ? (
         <div className="stack-l">
-        <LinkForm onAdded={() => undefined} />
-        <div className="group-title" style={{ margin: '0 4px -16px' }}>Or choose a source</div>
-        <div className="group" style={{ background: 'var(--surface-2)' }}>
-          {sources.data.sources.map((s) => (
-            <button key={s.id} className="row row-link" style={{ width: '100%', border: 0, background: 'none', textAlign: 'left', cursor: 'pointer' }} onClick={() => setProvider(s.id)}>
-              <ProviderMark provider={s.id} />
-              <div className="row-main">
-                <div className="row-title">{s.name}</div>
-                <div className="row-sub">{s.summary}</div>
-                <div className="caption secondary" style={{ marginTop: 2 }}>
-                  {s.method}
+          <LinkForm onAdded={() => undefined} />
+          <div className="group-title" style={{ margin: '0 4px -16px' }}>
+            Or choose a source
+          </div>
+          <div className="group" style={{ background: 'var(--surface-2)' }}>
+            {sources.data.sources.map((s) => (
+              <button key={s.id} className="row row-link" style={{ width: '100%', border: 0, background: 'none', textAlign: 'left', cursor: 'pointer' }} onClick={() => setProvider(s.id)}>
+                <ProviderMark provider={s.id} />
+                <div className="row-main">
+                  <div className="row-title">{s.name}</div>
+                  <div className="row-sub">{s.summary}</div>
+                  <div className="caption secondary" style={{ marginTop: 2 }}>
+                    {s.method}
+                  </div>
                 </div>
-              </div>
-              <ChevronRight size={18} className="row-chevron" aria-hidden />
-            </button>
-          ))}
-        </div>
+                <ChevronRight size={18} className="row-chevron" aria-hidden />
+              </button>
+            ))}
+          </div>
         </div>
       ) : (
         <div className="stack-l">
@@ -349,21 +381,7 @@ export function AddListSheet({ open, onClose, initial }: { open: boolean; onClos
               <ChevronLeft size={16} aria-hidden /> All sources
             </button>
           )}
-          {provider === 'trakt' ? (
-            <TraktPanel sources={sources.data} onAdded={() => undefined} />
-          ) : provider === 'imdb' ? (
-            <>
-              <LinkForm placeholder="https://www.imdb.com/list/ls020816781/" hint="Public IMDb lists work by link: no IMDb account needed, the order is kept (great for watch-order timelines), episodes are included, and the list syncs automatically." />
-              <div className="group-title" style={{ margin: '0 4px -12px' }}>Private lists and your watchlist</div>
-              <UploadInstructions provider={provider} />
-              <UploadBox provider={provider} />
-            </>
-          ) : (
-            <>
-              <UploadInstructions provider={provider} />
-              <UploadBox provider={provider} />
-            </>
-          )}
+          {provider === 'trakt' ? <TraktPanel sources={sources.data} onAdded={() => undefined} /> : desc && <SourcePanel source={desc} />}
           {desc && (
             <details>
               <summary className="footnote secondary" style={{ cursor: 'pointer' }}>

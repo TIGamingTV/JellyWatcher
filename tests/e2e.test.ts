@@ -454,6 +454,154 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     expect((await order()).map((x: any) => x[1])).toEqual(before.map((e: any) => e.itemId));
   });
 
+  it('skips an entry ("Not Watching") so Up Next moves on, and takes it back', async () => {
+    const thief = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 11524').get() as { id: number }).id;
+    const timeline = async () => (await admin.get(`/api/lists/${imdbListId}/timeline`)).data;
+    const before = await timeline();
+    expect(before.nextIndex).toBe(2);
+    expect(before.entries[2]).toMatchObject({ skipped: false });
+
+    expect((await admin.put(`/api/titles/${thief}/skipped`, { skipped: true, season: 1 })).status).toBe(400); // movies have no seasons
+    expect((await new Client(app).req('PUT', `/api/titles/${thief}/skipped`, { skipped: true })).status).toBe(401);
+    expect((await admin.put(`/api/titles/${thief}/skipped`, { skipped: true })).status).toBe(200);
+
+    const after = await timeline();
+    expect(after.entries[2]).toMatchObject({ skipped: true, state: 'unwatched' });
+    expect(after.nextIndex).toBe(3);
+    expect(after.summary).toMatchObject({ skippedEntries: 1, totalMinutes: before.summary.totalMinutes - 123 });
+    const home = await admin.get('/api/home');
+    const next = home.data.upNext.find((u: any) => u.list.id === imdbListId);
+    expect(next.entry.title.title).toBe('Severance');
+
+    // Watched wins over skipped.
+    const heat = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 949').get() as { id: number }).id;
+    await admin.put(`/api/titles/${heat}/skipped`, { skipped: true });
+    expect((await timeline()).entries[0]).toMatchObject({ state: 'watched', skipped: false });
+    await admin.put(`/api/titles/${heat}/skipped`, { skipped: false });
+
+    // A season skip covers that season's episode entries; unskipping the episode takes it back.
+    const sev = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 95396').get() as { id: number }).id;
+    await admin.put(`/api/titles/${sev}/skipped`, { skipped: true, season: 2 });
+    expect((await timeline()).entries[3].skipped).toBe(false); // the whole show is not skipped
+    await admin.put(`/api/titles/${sev}/skipped`, { skipped: false, season: 2, episode: 4 });
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM skipped_entries WHERE title_id = ?').get(sev)).toEqual({ n: 0 });
+
+    await admin.put(`/api/titles/${thief}/skipped`, { skipped: false });
+    expect((await timeline()).nextIndex).toBe(2);
+  });
+
+  it('sorts a list automatically by release date or title, saved as the personal order', async () => {
+    const names = async () => (await admin.get(`/api/lists/${imdbListId}/timeline`)).data.entries.map((e: any) => [e.title?.title, e.kind]);
+    const r = await admin.post(`/api/lists/${imdbListId}/order/auto`, { by: 'release' });
+    expect(r.status).toBe(200);
+    expect(r.data).toMatchObject({ ordered: 4, withoutDate: 0, list: { customOrder: true } });
+    expect(await names()).toEqual([
+      ['Thief', 'movie'],
+      ['Heat', 'movie'],
+      ['Severance', 'show'],
+      ['Severance', 'episode'],
+    ]);
+    await admin.post(`/api/lists/${imdbListId}/order/auto`, { by: 'release_desc' });
+    expect((await names()).map((x: any) => x[0])).toEqual(['Severance', 'Severance', 'Heat', 'Thief']);
+    await admin.post(`/api/lists/${imdbListId}/order/auto`, { by: 'title' });
+    expect((await names()).map((x: any) => x[0])).toEqual(['Heat', 'Severance', 'Severance', 'Thief']);
+    expect((await admin.post(`/api/lists/${imdbListId}/order/auto`, { by: 'random' })).status).toBe(400);
+    await admin.del(`/api/lists/${imdbListId}/order`);
+    expect((await names()).map((x: any) => x[0])).toEqual(['Heat', 'Severance', 'Thief', 'Severance']);
+  });
+
+  it('adds public Letterboxd, MDBList, AniList and MyAnimeList lists by link', async () => {
+    // Letterboxd: every page in order, duplicates dropped; the list syncs from then on.
+    const lb = await admin.post('/api/lists/link', { url: 'https://letterboxd.com/Mann/list/michael-mann-ranked/detail/' });
+    expect(lb.status).toBe(200);
+    expect(lb.data.list).toMatchObject({ provider: 'letterboxd', kind: 'public', name: 'Michael Mann, Ranked', canSync: true, autoSync: true, itemCount: 3, ownerName: 'mann' });
+    expect(mocks.state.letterboxdCalls).toEqual(['/mann/list/michael-mann-ranked/', '/mann/list/michael-mann-ranked/page/2/']);
+    const lbItems = ctx.db.prepare('SELECT source_title, source_year, position FROM list_items WHERE list_id = ? ORDER BY position').all(lb.data.list.id);
+    expect(lbItems).toEqual([
+      { source_title: 'Heat', source_year: 1995, position: 1 },
+      { source_title: 'Thief', source_year: 1981, position: 2 },
+      { source_title: 'Collateral', source_year: 2004, position: 3 },
+    ]);
+    expect((await admin.post(`/api/lists/${lb.data.list.id}/sync`)).data.result).toMatchObject({ added: 0, removed: 0, total: 3 });
+    expect((await admin.post('/api/lists/link', { url: 'https://letterboxd.com/mann/list/missing/' })).status).toBe(404);
+
+    // MDBList: ids are exact; people are skipped; the name comes from the list page.
+    const mdb = await admin.post('/api/lists/link', { url: 'https://mdblist.com/lists/someone/mann-and-more' });
+    expect(mdb.status).toBe(200);
+    expect(mdb.data.list).toMatchObject({ provider: 'mdblist', name: 'Mann & More', ownerName: 'Some One', itemCount: 2 });
+
+    // AniList: the Planning list; anime mapped to TMDb become a season of the show or a movie.
+    const ani = await admin.post('/api/lists/link', { url: 'https://anilist.co/user/kana/animelist' });
+    expect(ani.status).toBe(200);
+    expect(ani.data.list).toMatchObject({ provider: 'anilist', kind: 'watchlist', name: 'Kana’s Planning', itemCount: 3 });
+    const aniItems = ctx.db.prepare('SELECT source_title, tmdb_id, media_type, season_number, episode_title, source_episodes FROM list_items WHERE list_id = ? ORDER BY position').all(ani.data.list.id);
+    expect(aniItems).toEqual([
+      { source_title: 'Severance Season 2', tmdb_id: 95396, media_type: 'tv', season_number: 2, episode_title: 'Severance Season 2', source_episodes: 10 },
+      { source_title: 'Past Lives', tmdb_id: 666277, media_type: 'movie', season_number: null, episode_title: null, source_episodes: null },
+      { source_title: 'Shiranai Anime', tmdb_id: null, media_type: 'tv', season_number: null, episode_title: null, source_episodes: 12 },
+    ]);
+    expect((await admin.post('/api/lists/link', { url: 'https://anilist.co/user/hidden/animelist' })).status).toBe(404);
+    expect((await admin.post('/api/lists/link', { url: 'https://anilist.co/user/kana/animelist/Favourites' })).data.error.message).toMatch(/no anime list called/);
+
+    // MyAnimeList: status from the link; split seasons of one show become season entries.
+    const mal = await admin.post('/api/lists/link', { url: 'https://myanimelist.net/animelist/kana?status=6' });
+    expect(mal.status).toBe(200);
+    expect(mal.data.list).toMatchObject({ provider: 'myanimelist', name: 'kana’s Plan to Watch', itemCount: 2 });
+    const malItems = ctx.db.prepare('SELECT source_title, source_year, tmdb_id, season_number FROM list_items WHERE list_id = ? ORDER BY position').all(mal.data.list.id);
+    expect(malItems).toEqual([
+      { source_title: 'Severance', source_year: 2022, tmdb_id: 95396, season_number: 1 },
+      { source_title: 'Severance 2', source_year: 2025, tmdb_id: 95396, season_number: 2 },
+    ]);
+    expect((await admin.post('/api/lists/link', { url: 'https://myanimelist.net/animelist/nobody' })).status).toBe(404);
+
+    while (ctx.matcher.pendingCount() > 0 || ctx.jobs.isRunning('match')) await triggerJob(ctx, 'match', 'manual');
+    const tl = await admin.get(`/api/lists/${mal.data.list.id}/timeline`);
+    expect(tl.data.entries.map((e: any) => [e.kind, e.title?.title, e.season, e.episodes])).toEqual([
+      ['season', 'Severance', 1, 9],
+      ['season', 'Severance', 2, 10],
+    ]);
+
+    // Links that cannot be read explain why.
+    expect((await admin.post('/api/lists/link', { url: 'https://simkl.com/123/list/movies/plantowatch' })).data.error.message).toMatch(/Simkl/);
+    expect((await admin.post('/api/lists/link', { url: 'https://www.themoviedb.org/list/1-marvel' })).data.error.code).toBe('tmdb_not_configured');
+  });
+
+  it('imports anime and Simkl exports as one list per status still to watch', async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8" ?>
+<myanimelist>
+  <myinfo><user_name>kana</user_name><user_export_type>1</user_export_type></myinfo>
+  <anime><series_animedb_id>101</series_animedb_id><series_title><![CDATA[Severance 2]]></series_title><series_type>TV</series_type><series_episodes>10</series_episodes><my_status>Plan to Watch</my_status><my_comments><![CDATA[]]></my_comments></anime>
+  <anime><series_animedb_id>102</series_animedb_id><series_title><![CDATA[Past Lives]]></series_title><series_type>Movie</series_type><series_episodes>1</series_episodes><my_status>Watching</my_status></anime>
+  <anime><series_animedb_id>100</series_animedb_id><series_title><![CDATA[Severance]]></series_title><series_type>TV</series_type><series_episodes>9</series_episodes><my_status>Completed</my_status></anime>
+</myanimelist>`;
+    const up = await admin.req('POST', '/api/lists/upload', undefined, { raw: multipart({ provider: 'myanimelist' }, { name: 'animelist_1700000000_-_1.xml', content: xml, type: 'text/xml' }) });
+    expect(up.status).toBe(200);
+    expect(up.data.lists.map((l: any) => [l.name, l.kind, l.applied.total, l.applied.skipped])).toEqual([
+      ['MyAnimeList Plan to Watch', 'watchlist', 1, 1],
+      ['MyAnimeList Watching', 'upload', 1, 0],
+    ]);
+
+    const simkl = {
+      movies: [
+        { status: 'plantowatch', movie: { title: 'Heat', year: 1995, ids: { simkl: 1, imdb: 'tt0113277', tmdb: 949 } } },
+        { status: 'completed', movie: { title: 'Thief', year: 1981, ids: { simkl: 2, tmdb: 11524 } } },
+      ],
+      shows: [{ status: 'watching', show: { title: 'Severance', year: 2022, ids: { simkl: 3, tmdb: 95396, tvdb: 371980 } } }],
+      anime: [{ status: 'plantowatch', anime_type: 'tv', show: { title: 'Severance', year: 2022, ids: { simkl: 5000, mal: 100 } } }],
+    };
+    const s = await admin.req('POST', '/api/lists/upload', undefined, { raw: multipart({ provider: 'simkl' }, { name: 'simkl-backup.json', content: JSON.stringify(simkl), type: 'application/json' }) });
+    expect(s.status).toBe(200);
+    expect(s.data.lists.map((l: any) => [l.name, l.applied.total])).toEqual([
+      ['Simkl Plan to Watch', 2],
+      ['Simkl Watching', 1],
+    ]);
+    const csv = 'Title,Type,Year,TMDB,IMDB\nHeat,movie,1995,949,tt0113277\nSeverance,tv,2022,95396,\n';
+    const t = await admin.req('POST', '/api/lists/upload', undefined, { raw: multipart({ provider: 'tmdb' }, { name: 'mann.csv', content: csv, type: 'text/csv' }) });
+    expect(t.status).toBe(200);
+    expect(t.data.lists[0]).toMatchObject({ provider: 'tmdb', name: 'mann', canSync: false });
+    expect((await admin.req('POST', '/api/lists/upload', undefined, { raw: multipart({ provider: 'simkl' }, { name: 'x.txt', content: 'nope', type: 'text/plain' }) })).status).toBe(400);
+  });
+
   it('duplicates a list into an editable local list and adds titles found through Discover', async () => {
     const dup = await admin.post(`/api/lists/${imdbListId}/duplicate`, { name: 'My Mann Order' });
     expect(dup.status).toBe(200);

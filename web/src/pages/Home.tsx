@@ -1,16 +1,16 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Check, Circle, ListVideo, Play, Plus, Sparkles } from 'lucide-react';
+import { ArrowRight, Check, Circle, ListVideo, Play, Plus, SkipForward, Sparkles } from 'lucide-react';
 import { get } from '../lib/api';
 import { useUser } from '../lib/session';
 import type { TitleCard, UpNextItem } from '../lib/types';
-import { duration } from '../lib/format';
+import { duration, greeting } from '../lib/format';
 import { Banner, CenterLoading, ErrorState, PageHeader, Time } from '../components/ui';
 import { PosterImage, Shelf } from '../components/Poster';
 import { StagePill } from '../components/status';
-import { entryFacts, entryHeading } from '../components/Timeline';
-import { QuickWatchSheet } from '../components/Watched';
+import { entryFacts, entryHeading, scopeOf } from '../components/Timeline';
+import { QuickWatchSheet, useSkipToggle } from '../components/Watched';
 
 interface HomeData {
   counts: { watchlist: number; review: number; lists: number };
@@ -19,11 +19,6 @@ interface HomeData {
   upNext: UpNextItem[];
   activity: { id: number; kind: string; message: string; createdAt: string; titleId: number | null }[];
   attention: { kind: string; message: string; href: string }[];
-}
-
-function greeting() {
-  const h = new Date().getHours();
-  return h < 5 ? 'Good Evening' : h < 12 ? 'Good Morning' : h < 18 ? 'Good Afternoon' : 'Good Evening';
 }
 
 export function HomePage() {
@@ -35,7 +30,7 @@ export function HomePage() {
     { done: services.jellyfin, label: 'Connect Jellyfin', detail: 'See what is already in your library.', href: '/integrations/jellyfin', admin: true },
     { done: services.seerr, label: 'Connect Seerr', detail: 'Request missing movies and shows.', href: '/integrations/seerr', admin: true },
     { done: Boolean(services.metadata), label: 'Add a metadata source', detail: 'TMDb, or Seerr’s built-in TMDb access.', href: '/integrations/tmdb', admin: true },
-    { done: (q.data?.counts.lists ?? 0) > 0, label: 'Add your first watchlist', detail: 'From Trakt, Letterboxd or IMDb.', href: '/watchlists/lists?add=1', admin: false },
+    { done: (q.data?.counts.lists ?? 0) > 0, label: 'Add your first watchlist', detail: 'Paste a list link, or import from Trakt, Letterboxd, IMDb, anime lists and more.', href: '/watchlists/lists?add=1', admin: false },
   ].filter((s) => isAdmin || !s.admin);
   const setupDone = steps.every((s) => s.done);
 
@@ -99,7 +94,7 @@ export function HomePage() {
                 <Link to="/watchlists/lists">All Lists</Link>
               </div>
               <p className="footnote secondary" style={{ marginTop: -8 }}>
-                The next unwatched entry on each of your lists, in list order.
+                The next unwatched entry on each of your lists, in list order. Skip what you don’t want to watch.
               </p>
               <div className="shelf up-next">
                 {q.data.upNext.map((u) => (
@@ -141,7 +136,7 @@ export function HomePage() {
                 <ListVideo size={32} color="var(--accent)" aria-hidden style={{ margin: '0 auto 10px' }} />
                 <h2 className="title-3">Bring Your Watchlists Together</h2>
                 <p className="secondary" style={{ maxWidth: 460, margin: '8px auto 18px' }}>
-                  Connect Trakt, or import exports from Letterboxd and IMDb. JellyWatcher shows what’s already in Jellyfin and lets you request the rest.
+                  Paste a list link from Trakt, Letterboxd, IMDb, TMDb, MyAnimeList, AniList or MDBList, or import an export. JellyWatcher shows what’s already in Jellyfin and lets you request the rest.
                 </p>
                 <Link className="btn btn-primary btn-large" to="/watchlists/lists?add=1">
                   Add a Watchlist
@@ -196,6 +191,9 @@ function UpNextCard({ item }: { item: UpNextItem }) {
   const seasonParam = e.season !== null && e.season > 0 ? `&season=${e.season}` : '';
   const others = item.lists.length - 1;
   const [marking, setMarking] = useState(false);
+  const [skipping, setSkipping] = useState(false);
+  const skip = useSkipToggle();
+  const heading = [title, part].filter(Boolean).join(' · ');
   return (
     <article className="up-card" aria-label={`${title}${part ? `, ${part}` : ''}, next on ${item.list.name}`}>
       <Link to={`/titles/${t.id}`} className="poster-frame" tabIndex={-1} aria-hidden>
@@ -234,13 +232,26 @@ function UpNextCard({ item }: { item: UpNextItem }) {
           <button className="btn btn-small btn-gray" onClick={() => setMarking(true)} aria-label={`Mark ${title}${part ? ` ${part}` : ''} as watched`} aria-haspopup="dialog">
             <Check size={13} aria-hidden /> Watched
           </button>
+          <button
+            className="btn btn-small btn-gray"
+            disabled={skipping}
+            onClick={async () => {
+              setSkipping(true);
+              await skip(t.id, true, scopeOf(e), heading);
+              setSkipping(false);
+            }}
+            aria-label={`Not watching ${heading}: skip it`}
+            title="Not watching: skip to the next entry"
+          >
+            <SkipForward size={13} aria-hidden /> Skip
+          </button>
         </div>
       </div>
       {marking && (
         <QuickWatchSheet
           titleId={t.id}
-          heading={[title, part].filter(Boolean).join(' · ')}
-          scope={e.kind === 'season' ? { season: e.season } : e.kind === 'episode' ? { season: e.season, episode: e.episode } : {}}
+          heading={heading}
+          scope={scopeOf(e)}
           manualAt={e.manualAt}
           watched={e.state === 'watched'}
           onClose={() => setMarking(false)}

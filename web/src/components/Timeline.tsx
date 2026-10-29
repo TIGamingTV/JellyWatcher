@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { AlertTriangle, Check, Circle, GripVertical, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Circle, GripVertical, SkipForward, Trash2, Undo2 } from 'lucide-react';
 import type { Timeline, TimelineEntry, TimelineSummary } from '../lib/types';
-import { date, duration, episodeCode, plural } from '../lib/format';
+import { date, duration, episodeCode, plural, seasonName } from '../lib/format';
 import { PosterImage } from './Poster';
 import { StagePill } from './status';
-import { QuickWatchSheet } from './Watched';
+import { QuickWatchSheet, useSkipToggle } from './Watched';
 
 /** Display name of an entry: the show for seasons/episodes, plus what part of it. */
 export function entryHeading(e: TimelineEntry): { title: string; part: string | null } {
   const title = e.title?.title ?? e.sourceTitle;
   if (e.kind === 'episode') return { title, part: [episodeCode(e.season, e.episode), e.episodeTitle].filter(Boolean).join(' · ') };
-  if (e.kind === 'season') return { title, part: episodeCode(e.season, null) };
+  // Season entries can carry the source's own name for the season (anime seasons and cours).
+  if (e.kind === 'season') return { title, part: [episodeCode(e.season, null), seasonName(e.episodeTitle, title, e.season)].filter(Boolean).join(' · ') };
   return { title, part: null };
 }
 
@@ -33,7 +34,7 @@ export function TimelineSummaryPanel({ summary, compact }: { summary: TimelineSu
     { n: summary.seasons, label: summary.seasons === 1 ? 'Season' : 'Seasons' },
     { n: summary.episodes, label: summary.episodes === 1 ? 'Episode' : 'Episodes' },
   ].filter((s, i) => s.n > 0 || i === 0);
-  const done = summary.entries > 0 && summary.watchedEntries === summary.entries;
+  const done = summary.entries > 0 && summary.watchedEntries + (summary.skippedEntries ?? 0) >= summary.entries;
   return (
     <section className={compact ? 'tl-summary' : 'panel tl-summary'} aria-label="List totals">
       <div className="tl-stats">
@@ -60,6 +61,7 @@ export function TimelineSummaryPanel({ summary, compact }: { summary: TimelineSu
           <div className="tl-time">
             <span>
               <strong>{pct}%</strong> watched · {summary.watchedEntries} of {plural(summary.entries, 'entry', 'entries')} done
+              {summary.skippedEntries > 0 && ` · ${summary.skippedEntries} not watching`}
             </span>
             {summary.unknownRuntime > 0 && <span>{plural(summary.unknownRuntime, 'entry', 'entries')} without a runtime not counted</span>}
           </div>
@@ -76,17 +78,18 @@ interface RowProps {
   removable: boolean;
   total: number;
   onWatch: (e: TimelineEntry) => void;
+  onSkip: (e: TimelineEntry) => void;
   onRemove: (e: TimelineEntry) => void;
   onHandleDown: (ev: React.PointerEvent<HTMLButtonElement>) => void;
   onHandleKey: (ev: React.KeyboardEvent<HTMLButtonElement>) => void;
 }
 
-function EntryRow({ e, next, editing, removable, total, onWatch, onRemove, onHandleDown, onHandleKey }: RowProps) {
+function EntryRow({ e, next, editing, removable, total, onWatch, onSkip, onRemove, onHandleDown, onHandleKey }: RowProps) {
   const { title, part } = entryHeading(e);
   const facts = entryFacts(e);
   const progressLabel =
     e.state === 'in_progress' && e.episodes ? `${e.watchedEpisodes ?? 0} of ${plural(e.episodes, 'episode')}` : e.state === 'in_progress' ? `${e.percent}% watched` : null;
-  const kicker = next ? 'Up Next' : e.state === 'watched' ? (e.watchedAt ? `Watched ${date(e.watchedAt)}` : 'Watched') : e.state === 'in_progress' ? 'Watching' : null;
+  const kicker = e.skipped ? 'Not Watching' : next ? 'Up Next' : e.state === 'watched' ? (e.watchedAt ? `Watched ${date(e.watchedAt)}` : 'Watched') : e.state === 'in_progress' ? 'Watching' : null;
   const name = `${title}${part ? `, ${part}` : ''}`;
   const body = (
     <>
@@ -115,9 +118,9 @@ function EntryRow({ e, next, editing, removable, total, onWatch, onRemove, onHan
   );
   const label = `${e.position}. ${name}. ${facts.join(', ')}. ${kicker ?? ''}`;
   return (
-    <li className={`tl-item ${e.state}${next ? ' next' : ''}`} style={{ ['--pct' as string]: e.percent }} aria-current={next ? 'step' : undefined} data-item={e.itemId}>
+    <li className={`tl-item ${e.state}${e.skipped ? ' skipped' : ''}${next ? ' next' : ''}`} style={{ ['--pct' as string]: e.percent }} aria-current={next ? 'step' : undefined} data-item={e.itemId}>
       <span className="tl-node" aria-hidden>
-        {e.state === 'watched' ? <Check size={14} strokeWidth={3} /> : e.position}
+        {e.state === 'watched' ? <Check size={14} strokeWidth={3} /> : e.skipped ? <SkipForward size={12} strokeWidth={2.5} /> : e.position}
       </span>
       {e.title && !editing ? (
         <Link to={`/titles/${e.title.id}`} className="tl-card" aria-label={label}>
@@ -136,22 +139,35 @@ function EntryRow({ e, next, editing, removable, total, onWatch, onRemove, onHan
         ) : (
           <>
             {e.matched ? (
-              e.state !== 'watched' && (e.stage === 'listed' ? <span className="pill">Not Requested</span> : <StagePill stage={e.stage} />)
+              e.state !== 'watched' && !e.skipped && (e.stage === 'listed' ? <span className="pill">Not Requested</span> : <StagePill stage={e.stage} />)
             ) : (
               <Link to="/watchlists/review" className="pill pill-orange">
                 <AlertTriangle size={12} aria-hidden /> Needs Match
               </Link>
             )}
             {e.matched && e.title && (
-              <button
-                className={`tl-check${e.state === 'watched' ? ' on' : ''}`}
-                onClick={() => onWatch(e)}
-                aria-label={e.state === 'watched' ? `${name}: watched. Change the date or unmark` : `Mark ${name} as watched`}
-                title={e.state === 'watched' ? 'Watched' : 'Mark as watched'}
-                aria-haspopup="dialog"
-              >
-                {e.state === 'watched' ? <Check size={16} strokeWidth={3} aria-hidden /> : <Circle size={18} aria-hidden />}
-              </button>
+              <div className="tl-actions">
+                {e.state !== 'watched' && (
+                  <button
+                    className={`tl-check tl-skip${e.skipped ? ' on' : ''}`}
+                    onClick={() => onSkip(e)}
+                    aria-pressed={e.skipped}
+                    aria-label={e.skipped ? `${name}: not watching. Put it back in the watch order` : `Not watching ${name}: skip it`}
+                    title={e.skipped ? 'Not watching · tap to put it back' : 'Not watching (skip)'}
+                  >
+                    {e.skipped ? <Undo2 size={16} aria-hidden /> : <SkipForward size={17} aria-hidden />}
+                  </button>
+                )}
+                <button
+                  className={`tl-check${e.state === 'watched' ? ' on' : ''}`}
+                  onClick={() => onWatch(e)}
+                  aria-label={e.state === 'watched' ? `${name}: watched. Change the date or unmark` : `Mark ${name} as watched`}
+                  title={e.state === 'watched' ? 'Watched' : 'Mark as watched'}
+                  aria-haspopup="dialog"
+                >
+                  {e.state === 'watched' ? <Check size={16} strokeWidth={3} aria-hidden /> : <Circle size={18} aria-hidden />}
+                </button>
+              </div>
             )}
           </>
         )}
@@ -169,6 +185,11 @@ function EntryRow({ e, next, editing, removable, total, onWatch, onRemove, onHan
       )}
     </li>
   );
+}
+
+/** The part of the title an entry stands for. */
+export function scopeOf(e: Pick<TimelineEntry, 'kind' | 'season' | 'episode'>): { season?: number | null; episode?: number | null } {
+  return e.kind === 'season' ? { season: e.season } : e.kind === 'episode' ? { season: e.season, episode: e.episode } : {};
 }
 
 function renumber(entries: TimelineEntry[]): TimelineEntry[] {
@@ -220,7 +241,18 @@ export function TimelineView({
     if (!drag.current) setEntries(timeline.entries);
   }, [timeline.entries]);
 
-  const nextIndex = entries.findIndex((e) => e.matched && e.state !== 'watched');
+  const nextIndex = entries.findIndex((e) => e.matched && e.state !== 'watched' && !e.skipped);
+  const skip = useSkipToggle();
+  const onSkip = (e: TimelineEntry) => {
+    if (!e.title) return;
+    const h = entryHeading(e);
+    const heading = [h.title, h.part].filter(Boolean).join(' · ');
+    // Optimistic: the row updates right away; the refetch confirms it.
+    setEntries((all) => all.map((x) => (x.itemId === e.itemId ? { ...x, skipped: !e.skipped } : x)));
+    void skip(e.title.id, !e.skipped, scopeOf(e), heading).then((ok) => {
+      if (!ok) setEntries(timeline.entries);
+    });
+  };
 
   const commit = (from: number, to: number) => {
     if (from === to) return;
@@ -340,6 +372,7 @@ export function TimelineView({
             removable={removable}
             total={entries.length}
             onWatch={setWatching}
+            onSkip={onSkip}
             onRemove={(x) => onRemove?.(x)}
             onHandleDown={onHandleDown(i)}
             onHandleKey={onHandleKey(i)}
@@ -353,7 +386,7 @@ export function TimelineView({
         <QuickWatchSheet
           titleId={w.title.id}
           heading={[entryHeading(w).title, entryHeading(w).part].filter(Boolean).join(' · ')}
-          scope={w.kind === 'season' ? { season: w.season } : w.kind === 'episode' ? { season: w.season, episode: w.episode } : {}}
+          scope={scopeOf(w)}
           manualAt={w.manualAt}
           watched={w.state === 'watched'}
           onClose={() => setWatching(null)}

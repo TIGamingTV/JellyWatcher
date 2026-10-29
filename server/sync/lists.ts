@@ -1,7 +1,10 @@
 import type { AppContext } from '../context.js';
 import { ProviderError } from '../http/errors.js';
 import { ImdbClient } from '../providers/imdb.js';
-import { LetterboxdRssClient } from '../providers/letterboxd.js';
+import { AnilistClient } from '../providers/anilist.js';
+import { LetterboxdRssClient, LetterboxdWebClient } from '../providers/letterboxd.js';
+import { MdblistClient } from '../providers/mdblist.js';
+import { MalClient } from '../providers/myanimelist.js';
 import { listInfoFromJson, type TraktClient } from '../providers/trakt.js';
 import type { ListFetchResult } from '../providers/types.js';
 import type { ApplyResult, ListRow } from '../services/lists.js';
@@ -60,6 +63,25 @@ export async function fetchList(ctx: AppContext, list: ListRow): Promise<ListFet
     const ref = ctx.lists.ref<{ mode?: string; listId?: string }>(list);
     if (ref.mode === 'graphql' && ref.listId) return new ImdbClient().list(ref.listId);
   }
+  const ref = ctx.lists.ref<{ mode?: string; user?: string; slug?: string | null; listId?: number; status?: number; list?: string | null }>(list);
+  if (list.provider === 'letterboxd' && ref.mode === 'web' && ref.user) {
+    const own = ctx.connections.get(list.user_id, 'letterboxd')?.accountName;
+    return new LetterboxdWebClient().list({ user: ref.user, slug: ref.slug ?? null }, own);
+  }
+  if (list.provider === 'tmdb' && ref.mode === 'api' && ref.listId) {
+    const tmdb = ctx.integrations.tmdb();
+    if (!tmdb) throw new ProviderError('tmdb', 'config', 'TMDb lists need the TMDb API token. An administrator can add it in Integrations › TMDb.');
+    return tmdb.list(ref.listId);
+  }
+  if (list.provider === 'myanimelist' && ref.mode === 'web' && ref.user) {
+    await ctx.animeIds.load();
+    return new MalClient().list(ref.user, ref.status ?? 6, ctx.animeIds);
+  }
+  if (list.provider === 'anilist' && ref.mode === 'api' && ref.user) {
+    await ctx.animeIds.load();
+    return new AnilistClient().list(ref.user, ref.list ?? null, ctx.animeIds);
+  }
+  if (list.provider === 'mdblist' && ref.mode === 'json' && ref.user && ref.slug) return new MdblistClient().list(ref.user, ref.slug);
   if (list.provider === 'letterboxd' && list.kind === 'diary') {
     const conn = ctx.connections.get(list.user_id, 'letterboxd');
     const username = conn?.accountName ?? list.owner_name;

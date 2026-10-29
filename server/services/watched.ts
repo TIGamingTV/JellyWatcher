@@ -97,8 +97,66 @@ export function parseWatchedAt(input: string | null | undefined): string {
   return new Date(Math.min(t, Date.now())).toISOString();
 }
 
+/** Parts of a title the person decided not to watch ("Not Watching"). */
+export interface SkipMarks {
+  title: boolean;
+  seasons: Set<number>;
+  /** "season:episode" */
+  episodes: Set<string>;
+}
+
+export function loadSkips(db: DB, userId: number, titleIds: number[]): Map<number, SkipMarks> {
+  const out = new Map<number, SkipMarks>();
+  if (titleIds.length === 0) return out;
+  const rows = inChunks(titleIds, (c, ph) =>
+    db.prepare(`SELECT title_id, season, episode FROM skipped_entries WHERE user_id = ? AND title_id IN (${ph})`).all(userId, ...c) as { title_id: number; season: number; episode: number }[],
+  );
+  for (const r of rows) {
+    const m = out.get(r.title_id) ?? { title: false, seasons: new Set<number>(), episodes: new Set<string>() };
+    if (r.season === TITLE) m.title = true;
+    else if (r.episode === WHOLE) m.seasons.add(r.season);
+    else m.episodes.add(epKey(r.season, r.episode));
+    out.set(r.title_id, m);
+  }
+  return out;
+}
+
+/** Whether a skip covers the scope: the whole title covers its seasons, a season its episodes. */
+export function skipCovers(m: SkipMarks | undefined, season: number | null, episode: number | null): boolean {
+  if (!m) return false;
+  if (m.title) return true;
+  if (season === null) return false;
+  if (m.seasons.has(season)) return true;
+  return episode !== null && m.episodes.has(epKey(season, episode));
+}
+
 export class WatchService {
   constructor(private readonly db: DB) {}
+
+  /** Marks a title, season or episode as "not watching". */
+  skip(userId: number, titleId: number, scope: WatchScope): void {
+    const { season, episode } = this.normalize(titleId, scope);
+    this.db
+      .prepare('INSERT OR IGNORE INTO skipped_entries (user_id, title_id, season, episode, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(userId, titleId, season ?? TITLE, episode ?? WHOLE, nowIso());
+  }
+
+  /** Takes a skip back, including skips of what contains the scope (the season, the whole title). */
+  unskip(userId: number, titleId: number, scope: WatchScope): void {
+    const { season, episode } = this.normalize(titleId, scope);
+    const del = this.db.prepare('DELETE FROM skipped_entries WHERE user_id = ? AND title_id = ? AND season = ? AND episode = ?');
+    this.db.transaction(() => {
+      del.run(userId, titleId, TITLE, WHOLE);
+      if (season === null) {
+        // Unskipping the whole title clears every narrower skip too.
+        this.db.prepare('DELETE FROM skipped_entries WHERE user_id = ? AND title_id = ?').run(userId, titleId);
+        return;
+      }
+      del.run(userId, titleId, season, WHOLE);
+      if (episode !== null) del.run(userId, titleId, season, episode);
+      else this.db.prepare('DELETE FROM skipped_entries WHERE user_id = ? AND title_id = ? AND season = ?').run(userId, titleId, season);
+    })();
+  }
 
   marks(userId: number, titleId: number): ManualMarks {
     return loadManualMarks(this.db, userId, [titleId]).get(titleId) ?? empty();

@@ -122,6 +122,25 @@ export async function watchRoutes(app: FastifyInstance, { ctx }: AppDeps) {
     return { status, watch: watchDetail(ctx, u, ctx.titles.get(id)!, status) };
   });
 
+  /** "Not Watching": skip a title, season or episode so Up Next moves on to the next entry. */
+  app.put('/titles/:id/skipped', { config: { rateLimit: { max: 240, timeWindow: '1 minute' } } }, async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    const body = parse(
+      z.object({
+        skipped: z.boolean(),
+        season: z.number().int().min(0).max(500).nullable().optional(),
+        episode: z.number().int().min(1).max(5000).nullable().optional(),
+      }),
+      req.body,
+    );
+    if (!ctx.titles.get(id)) throw new ApiError(404, 'not_found', 'Title not found.');
+    const scope = { season: body.season ?? null, episode: body.episode ?? null };
+    if (body.skipped) ctx.watches.skip(u.id, id, scope);
+    else ctx.watches.unskip(u.id, id, scope);
+    return { ok: true, skipped: body.skipped };
+  });
+
   // ---- Discover: find titles to add to a local list -----------------------------------------
   app.get('/discover', async (req) => {
     const u = requireUser(req);

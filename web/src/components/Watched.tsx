@@ -35,6 +35,31 @@ export function useWatchToggle(titleId: number) {
   };
 }
 
+/**
+ * "Not Watching": skips a title, season or episode (or takes that back) so Up Next moves on to the
+ * next entry. Shows an Undo action after skipping.
+ */
+export function useSkipToggle() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const run = async (titleId: number, skipped: boolean, scope: WatchScope, heading: string, undo = true): Promise<boolean> => {
+    try {
+      await put(`/titles/${titleId}/skipped`, { skipped, season: scope.season ?? null, episode: scope.episode ?? null });
+      for (const k of ['lists', 'home']) void qc.invalidateQueries({ queryKey: [k] });
+      toast(
+        'success',
+        skipped ? `Skipped ${heading}. Up Next moves on.` : `${heading} is back in your watch order.`,
+        skipped && undo ? { label: 'Undo', onClick: () => void run(titleId, false, scope, heading, false) } : undefined,
+      );
+      return true;
+    } catch (err) {
+      toast('error', errorText(err));
+      return false;
+    }
+  };
+  return run;
+}
+
 export function DateField({ value, onChange, label = 'Watched on' }: { value: string; onChange: (v: string) => void; label?: string }) {
   const id = useId();
   return (

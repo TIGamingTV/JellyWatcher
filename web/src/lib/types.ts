@@ -2,12 +2,17 @@ import type { AvailabilityState, FreshStatus, LifecycleStage, RequestState, View
 
 export type MediaType = 'movie' | 'tv';
 
+export type SourceId = 'trakt' | 'letterboxd' | 'imdb' | 'tmdb' | 'myanimelist' | 'anilist' | 'simkl' | 'mdblist';
+export type UploadSource = Exclude<SourceId, 'trakt'>;
+
 export interface SourceDescriptor {
-  id: 'trakt' | 'letterboxd' | 'imdb';
+  id: SourceId;
   name: string;
   summary: string;
   method: string;
   capabilities: { oauth: boolean; autoSync: boolean; upload: boolean; publicLists: boolean; urlImport: boolean; listSearch: boolean };
+  link: { example: string; hint: string } | null;
+  upload: { accept: string; label: string; steps: string[] } | null;
   limitations: string[];
 }
 
@@ -52,7 +57,7 @@ export interface TitleCard {
 
 export interface ListView {
   id: number;
-  provider: 'trakt' | 'letterboxd' | 'imdb' | 'local';
+  provider: SourceId | 'local';
   kind: 'watchlist' | 'owned' | 'liked' | 'public' | 'upload' | 'diary' | 'local';
   name: string;
   description: string | null;
@@ -89,6 +94,7 @@ export interface TimelineSummary {
   watchedMinutes: number;
   remainingMinutes: number;
   watchedEntries: number;
+  skippedEntries: number;
   unknownRuntime: number;
   unmatched: number;
 }
@@ -117,6 +123,8 @@ export interface TimelineEntry {
   /** Date of the person's own watched mark covering this entry. */
   manualAt: string | null;
   watchedAt: string | null;
+  /** Marked "Not Watching": Up Next passes over it. */
+  skipped: boolean;
 }
 
 export interface Timeline {
@@ -256,7 +264,7 @@ export interface ConnectionView {
 }
 
 export interface SourcesResponse {
-  sources: (SourceDescriptor & { available: boolean; connection: ConnectionView | null; listCount: number })[];
+  sources: (SourceDescriptor & { available: boolean; linkReady: boolean; connection: ConnectionView | null; listCount: number })[];
   jellyfin: { available: boolean; linked: { userId: string; username: string | null } | null };
   seerr: { available: boolean; linked: { userId: number; username: string | null } | null };
 }

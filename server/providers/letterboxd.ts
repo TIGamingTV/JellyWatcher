@@ -3,7 +3,8 @@ import { unzipSync } from 'fflate';
 import { HttpClient, type FetchLike } from '../http/client.js';
 import { ProviderError } from '../http/errors.js';
 import { decodeText, headerIndex, parseCsvRows, toFloat, toInt } from './csv.js';
-import type { ListFetchResult, SourceItem } from './types.js';
+import { attr, metaContent } from './html.js';
+import type { ListFetchResult, SourceItem, SourceListInfo } from './types.js';
 
 /**
  * Letterboxd adapter. Letterboxd's API is not available to personal projects, so this adapter only
@@ -184,6 +185,124 @@ export function parseLetterboxdRss(text: string, username: string): ListFetchRes
     items,
     skipped,
   };
+}
+
+// ---- Public lists and watchlists by link -------------------------------------------------------
+
+/** A public Letterboxd list (slug) or watchlist (slug null) of a member. */
+export interface LetterboxdPageRef {
+  user: string;
+  slug: string | null;
+}
+
+const LB_SLUG = /^[a-z0-9][a-z0-9-]{0,150}$/i;
+
+/** Parses letterboxd.com/<user>/list/<slug>/… and /<user>/watchlist/… links; 'short' for boxd.it links. */
+export function parseLetterboxdUrl(input: string): LetterboxdPageRef | 'short' | null {
+  let url: URL;
+  try {
+    url = new URL(input.trim());
+  } catch {
+    return null;
+  }
+  if (/^boxd\.it$/i.test(url.hostname)) return /^\/[A-Za-z0-9]{2,12}\/?$/.test(url.pathname) ? 'short' : null;
+  if (!/^(www\.)?letterboxd\.com$/i.test(url.hostname)) return null;
+  const parts = url.pathname.split('/').filter(Boolean);
+  const user = parts[0];
+  if (!user || !LETTERBOXD_USERNAME.test(user)) return null;
+  if (parts[1] === 'watchlist') return { user: user.toLowerCase(), slug: null };
+  if (parts[1] === 'list' && parts[2] && LB_SLUG.test(parts[2])) return { user: user.toLowerCase(), slug: parts[2].toLowerCase() };
+  return null;
+}
+
+export const letterboxdPageUrl = (ref: LetterboxdPageRef) => `https://letterboxd.com/${ref.user}/${ref.slug ? `list/${ref.slug}` : 'watchlist'}/`;
+
+/** Reads the films of one page of a list or watchlist, in page order, plus the number of pages. */
+export function parseLetterboxdPage(html: string, basePath?: string): { films: { slug: string; title: string; year: number | null }[]; pages: number; title: string | null; description: string | null } {
+  const films: { slug: string; title: string; year: number | null }[] = [];
+  const seen = new Set<string>();
+  for (const tag of html.match(/<[a-z]+\s[^>]*data-(?:item|film)-slug=[^>]*>/gi) ?? []) {
+    const slug = attr(tag, 'data-item-slug') ?? attr(tag, 'data-film-slug');
+    if (!slug || seen.has(slug)) continue;
+    const name = attr(tag, 'data-item-name') ?? attr(tag, 'data-item-full-display-name') ?? attr(tag, 'data-film-name') ?? slug;
+    const m = name.match(/^(.*?)\s*\((\d{4})\)$/);
+    seen.add(slug);
+    films.push({ slug, title: (m ? m[1]! : name).trim(), year: m ? Number(m[2]) : null });
+  }
+  let pages = 1;
+  const esc = (basePath ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const m of html.matchAll(new RegExp(`${esc}${basePath ? '' : '/'}page/(\\d{1,4})/?["']`, 'gi'))) pages = Math.max(pages, Number(m[1]));
+  return { films, pages, title: metaContent(html, 'og:title'), description: metaContent(html, 'og:description') };
+}
+
+export class LetterboxdWebClient {
+  private readonly http: HttpClient;
+
+  constructor(private readonly fetchImpl?: FetchLike) {
+    this.http = new HttpClient({ provider: 'letterboxd', baseUrl: 'https://letterboxd.com', fetchImpl, retries: 2, minIntervalMs: 400, timeoutMs: 20_000 });
+  }
+
+  private async page(path: string): Promise<string> {
+    try {
+      return (await this.http.get<string>(path, undefined, { responseType: 'text', headers: { Accept: 'text/html,application/xhtml+xml' } })).data;
+    } catch (err) {
+      if (err instanceof ProviderError && err.kind === 'not_found') throw new ProviderError('letterboxd', 'not_found', 'No public Letterboxd list was found at that link. Private lists can be imported from an export.');
+      if (err instanceof ProviderError && err.kind === 'forbidden') {
+        throw new ProviderError('letterboxd', 'forbidden', 'Letterboxd refused the request (it may be challenging automated traffic). Try again later, or upload an export.');
+      }
+      throw err;
+    }
+  }
+
+  /** Follows a boxd.it short link to the list it points at. */
+  async resolveShort(url: string): Promise<LetterboxdPageRef | null> {
+    const http = new HttpClient({ provider: 'letterboxd', baseUrl: 'https://boxd.it', retries: 1, fetchImpl: this.fetchImpl });
+    const res = await http.get<string>(new URL(url).pathname, undefined, { responseType: 'text', headers: { Accept: 'text/html' } });
+    const target = metaContent(res.data, 'og:url');
+    const ref = target ? parseLetterboxdUrl(target) : null;
+    return ref && ref !== 'short' ? ref : null;
+  }
+
+  async list(ref: LetterboxdPageRef, ownUsername?: string | null): Promise<ListFetchResult> {
+    const base = letterboxdPageUrl(ref).replace('https://letterboxd.com', '');
+    const first = parseLetterboxdPage(await this.page(base), base);
+    const films = [...first.films];
+    const pages = Math.min(first.pages, 100);
+    for (let p = 2; p <= pages; p++) films.push(...parseLetterboxdPage(await this.page(`${base}page/${p}/`), base).films);
+    if (films.length === 0 && /Just a moment|challenge-platform/i.test(first.title ?? '')) {
+      throw new ProviderError('letterboxd', 'forbidden', 'Letterboxd is challenging automated traffic right now. Try again later, or upload an export.');
+    }
+    const items: SourceItem[] = [];
+    const keys = new Set<string>();
+    for (const f of films) {
+      const sourceUrl = `https://letterboxd.com/film/${f.slug}/`;
+      if (keys.has(sourceUrl)) continue;
+      keys.add(sourceUrl);
+      items.push({ sourceKey: sourceUrl, title: f.title, year: f.year, mediaType: 'movie', sourceUrl, position: items.length + 1 });
+    }
+    const url = letterboxdPageUrl(ref);
+    const own = Boolean(ownUsername && ownUsername.toLowerCase() === ref.user);
+    const info: SourceListInfo = ref.slug
+      ? {
+          externalId: `list:${url.toLowerCase().replace(/\/+$/, '')}`,
+          name: first.title?.trim() || ref.slug.replace(/-/g, ' '),
+          kind: own ? 'owned' : 'public',
+          description: first.description?.trim() || null,
+          ownerName: ref.user,
+          url,
+          itemCount: items.length,
+        }
+      : {
+          // Your own watchlist replaces an uploaded one; someone else's is a public list.
+          externalId: own ? 'watchlist' : `watchlist:${ref.user}`,
+          name: own ? 'Letterboxd Watchlist' : first.title?.trim() || `${ref.user}’s Watchlist`,
+          kind: own ? 'watchlist' : 'public',
+          ownerName: ref.user,
+          url,
+          itemCount: items.length,
+        };
+    return { info, items, skipped: 0 };
+  }
 }
 
 export class LetterboxdRssClient {

@@ -1,6 +1,8 @@
+import path from 'node:path';
 import type { Logger } from 'pino';
 import type { AppConfig } from './config.js';
 import type { DB } from './db/index.js';
+import { AnimeIds } from './providers/anime.js';
 import type { SecretBox } from './security/crypto.js';
 import { ActivityService } from './services/activity.js';
 import { ConnectionService } from './services/connections.js';
@@ -26,6 +28,8 @@ export class AppContext {
   readonly activity: ActivityService;
   readonly jobs: JobRunner;
   readonly watches: WatchService;
+  /** MyAnimeList / AniList / Simkl ids → TMDb, loaded on first use. */
+  readonly animeIds: AnimeIds;
 
   constructor(
     readonly config: AppConfig,
@@ -44,6 +48,7 @@ export class AppContext {
     this.activity = new ActivityService(db);
     this.jobs = new JobRunner(db, log.child({ component: 'jobs' }));
     this.watches = new WatchService(db);
+    this.animeIds = new AnimeIds({ cacheFile: path.join(config.dataDir, 'cache', 'anime-ids.json'), log: log.child({ component: 'anime-ids' }) });
   }
 
   metadata(): MetadataSource | null {
