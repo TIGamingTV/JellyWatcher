@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { ChevronLeft, Play, Server, UserRound } from 'lucide-react';
+import { ChevronLeft, Server, UserRound } from 'lucide-react';
 import { errorText, post, setCsrfToken } from '../lib/api';
 import { useRefreshMe } from '../lib/session';
 import type { Me, QuickConnectStart } from '../lib/types';
@@ -10,9 +10,7 @@ function AuthCard({ title, lede, children }: { title: string; lede: string; chil
   return (
     <div className="auth-wrap">
       <main className="auth-card">
-        <div className="brand-mark" aria-hidden>
-          <Play size={24} fill="currentColor" />
-        </div>
+        <img className="brand-mark" src="/logo.png" alt="" aria-hidden />
         <h1 className="title-1">{title}</h1>
         <p className="lede">{lede}</p>
         {children}
