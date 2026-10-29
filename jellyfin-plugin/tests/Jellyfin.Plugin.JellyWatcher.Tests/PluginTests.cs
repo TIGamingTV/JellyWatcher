@@ -89,6 +89,16 @@ public class WebPatchesTests
         Assert.Equal("bookmarks", link["icon"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("movie_filter", "movie_filter")]
+    [InlineData("x\" onmouseover=\"alert(1)", "bookmarks")]
+    [InlineData("List", "bookmarks")]
+    public void OnlyUsesPlainIconNames(string icon, string expected)
+    {
+        var patched = WebPatches.AddMenuLink("{\"plugins\":[]}", new PluginConfiguration { MenuIcon = icon });
+        Assert.Equal(expected, JsonNode.Parse(patched)!["menuLinks"]![0]!["icon"]!.GetValue<string>());
+    }
+
     [Fact]
     public void LeavesOtherJsonFilesAlone() => Assert.Equal("{\"name\":\"x\"}", WebPatches.AddMenuLink("{\"name\":\"x\"}", new PluginConfiguration()));
 
@@ -126,6 +136,15 @@ public class JellyWatcherApiTests
         using var req = JellyWatcherApi.Build(JellyWatcherApi.BaseUri("http://jw:8484")!, "k", HttpMethod.Get, "images/tmdb/w185/a.jpg", null, "1", "srv");
         Assert.False(req.Headers.Contains(JellyWatcherApi.UserHeader));
     }
+
+    [Theory]
+    [InlineData("http://jw:8484", "http://JW:8484/base/", true)]
+    [InlineData("https://watch.example.com", "https://watch.example.com:443", true)]
+    [InlineData("http://jw:8484", "https://jw:8484", false)]
+    [InlineData("http://jw:8484", "http://jw:8485", false)]
+    [InlineData("http://jw:8484", "http://evil:8484", false)]
+    [InlineData("http://jw:8484", "", false)]
+    public void ComparesServers(string a, string b, bool same) => Assert.Equal(same, JellyWatcherApi.SameServer(a, b));
 
     [Fact]
     public void KnowsWhenItIsConfigured()

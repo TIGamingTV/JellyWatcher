@@ -41,6 +41,17 @@ public static class JellyWatcherApi
         return new Uri(uri.GetLeftPart(UriPartial.Path).TrimEnd('/') + "/", UriKind.Absolute);
     }
 
+    /// <summary>Whether two addresses point at the same server (scheme, host and port).</summary>
+    /// <param name="a">One address.</param>
+    /// <param name="b">The other address.</param>
+    /// <returns>True when both are valid and share scheme, host and port.</returns>
+    public static bool SameServer(string? a, string? b)
+    {
+        var x = BaseUri(a);
+        var y = BaseUri(b);
+        return x is not null && y is not null && Uri.Compare(x, y, UriComponents.SchemeAndServer, UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) == 0;
+    }
+
     /// <summary>Whether the settings are complete enough to call JellyWatcher.</summary>
     /// <param name="config">Plugin settings.</param>
     /// <returns>True when a valid address and a key are set.</returns>

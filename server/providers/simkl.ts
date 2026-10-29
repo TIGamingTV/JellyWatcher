@@ -3,7 +3,7 @@ import type { MediaType } from '../domain/matching.js';
 import { animeItem, type AnimeIds } from './anime.js';
 import { decodeText } from './csv.js';
 import { KEEP_STATUSES, STATUS_LABEL, normalizeStatus, parseIdCsv, type WatchStatus } from './generic.js';
-import { UploadError } from './letterboxd.js';
+import { MAX_UNZIPPED_BYTES, MAX_ZIP_ENTRIES, UploadError } from './letterboxd.js';
 import type { ListFetchResult, SourceItem } from './types.js';
 
 /**
@@ -115,9 +115,21 @@ export function parseSimklExport(filename: string, buf: Uint8Array, anime: Anime
   const lower = filename.toLowerCase();
   if (lower.endsWith('.zip')) {
     let files: Record<string, Uint8Array>;
+    let count = 0;
+    let total = 0;
     try {
-      files = unzipSync(buf, { filter: (f) => /\.(json|csv)$/i.test(f.name) && !f.name.startsWith('__MACOSX/') && f.originalSize < 80 * 1024 * 1024 });
-    } catch {
+      files = unzipSync(buf, {
+        filter: (f) => {
+          if (!/\.(json|csv)$/i.test(f.name) || f.name.startsWith('__MACOSX/')) return false;
+          // fflate never unpacks more than the declared size, so this caps memory use.
+          count++;
+          total += f.originalSize;
+          if (count > MAX_ZIP_ENTRIES || total > MAX_UNZIPPED_BYTES) throw new UploadError('The archive is too large.');
+          return true;
+        },
+      });
+    } catch (err) {
+      if (err instanceof UploadError) throw err;
       throw new UploadError('The ZIP file could not be read.');
     }
     const names = Object.keys(files).sort((a, b) => Number(b.endsWith('.json')) - Number(a.endsWith('.json')));

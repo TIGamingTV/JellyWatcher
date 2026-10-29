@@ -165,8 +165,14 @@ function originAllowed(origin: string, req: FastifyRequest, ctx: AppContext): bo
     return false;
   }
   if (ctx.config.publicUrl && o.origin === ctx.config.publicUrl.origin) return true;
-  const host = (ctx.config.trustProxy && typeof req.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'].split(',')[0]!.trim() : req.headers.host) ?? '';
-  return o.host === host;
+  // Fastify only takes X-Forwarded-Host from a trusted proxy (JW_TRUST_PROXY), otherwise the Host
+  // header. This works for direct access (e.g. http:// over Tailscale) and through an HTTPS proxy.
+  try {
+    // Parsed with the origin's scheme so default ports compare equal ("host:443" vs "host").
+    return o.host === new URL(`${o.protocol}//${req.host}`).host;
+  } catch {
+    return false;
+  }
 }
 
 export function setSessionCookie(reply: FastifyReply, req: FastifyRequest, ctx: AppContext, token: string, expiresAt: Date): void {

@@ -125,14 +125,9 @@ export class HttpClient {
 
       let res: Response;
       try {
-        res = await this.opts.fetchImpl(url, {
-          method,
-          headers,
-          body,
-          redirect: 'follow',
-          signal: AbortSignal.timeout(req.timeoutMs ?? this.opts.timeoutMs),
-        });
+        res = await this.send(url, { method, headers, body, signal: AbortSignal.timeout(req.timeoutMs ?? this.opts.timeoutMs) });
       } catch (cause) {
+        if (cause instanceof ProviderError) throw cause;
         const isTimeout = cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError');
         const err = new ProviderError(this.opts.provider, isTimeout ? 'timeout' : 'network', undefined, { cause });
         if (attempt < maxRetries) {
@@ -168,6 +163,32 @@ export class HttpClient {
     }
   }
 
+  /**
+   * Clients with credential headers (API keys, tokens) follow redirects themselves and only to the
+   * same server (an http → https upgrade included): fetch would pass headers like X-Api-Key on to any
+   * other host. Clients without credentials follow redirects normally (e.g. boxd.it short links).
+   */
+  private async send(url: string, init: RequestInit & { method: string; headers: Record<string, string> }): Promise<Response> {
+    if (!this.opts.headers) return this.opts.fetchImpl(url, { ...init, redirect: 'follow' });
+    let current = new URL(url);
+    let { method, body } = init;
+    for (let hop = 0; ; hop++) {
+      const res = await this.opts.fetchImpl(current.toString(), { ...init, method, body, redirect: 'manual' });
+      const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+      if (!location) return res;
+      await res.body?.cancel().catch(() => undefined);
+      const next = new URL(location, current);
+      if (hop >= 5 || !sameServer(current, next)) {
+        throw new ProviderError(this.opts.provider, 'invalid_response', 'The service redirected to another address. Enter the final address (including http or https) in its settings.', { status: res.status });
+      }
+      if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === 'POST')) {
+        method = 'GET';
+        body = undefined;
+      }
+      current = next;
+    }
+  }
+
   private async readBody<T>(res: Response, type: 'json' | 'text' | 'buffer'): Promise<T> {
     if (type === 'buffer') return Buffer.from(await res.arrayBuffer()) as T;
     const text = await res.text();
@@ -187,6 +208,12 @@ export class HttpClient {
   post<T = unknown>(path: string, body?: unknown, extra: Partial<RequestOptions> = {}) {
     return this.request<T>({ ...extra, method: 'POST', path, body });
   }
+}
+
+function sameServer(from: URL, to: URL): boolean {
+  if (from.hostname !== to.hostname) return false;
+  if (from.protocol === to.protocol) return from.port === to.port;
+  return from.protocol === 'http:' && to.protocol === 'https:';
 }
 
 /**

@@ -40,6 +40,8 @@ export interface UserContext {
   id: number;
   jellyfinUserId: string | null;
   seerrUserId: number | null;
+  /** Administrators also see who made other people's requests. */
+  role?: 'admin' | 'user';
 }
 
 interface JfRow {
@@ -204,7 +206,7 @@ export class StatusService {
           stale: !sr.ready || sr.stale,
           source: 'Seerr',
           requestId: req.id,
-          requestedBy: req.requested_by,
+          requestedBy: mine || user.role === 'admin' ? req.requested_by : null,
           mine: Boolean(mine),
         };
       } else if (!sr.ready) {

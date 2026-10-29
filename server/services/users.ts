@@ -99,7 +99,7 @@ export class UserService {
     }
     if (patch.jellyfinUserId) {
       const other = this.byJellyfinId(patch.jellyfinUserId);
-      if (other && other.id !== id) throw new ApiError(409, 'jellyfin_linked', `That Jellyfin account is already linked to ${other.username}.`);
+      if (other && other.id !== id) throw new ApiError(409, 'jellyfin_linked', 'That Jellyfin account is already linked to another JellyWatcher account.');
     }
     const sets: string[] = [];
     const vals: unknown[] = [];

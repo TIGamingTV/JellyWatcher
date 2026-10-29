@@ -21,6 +21,12 @@ public class JellyWatcherProxy
 
     private const int MaxResponseBytes = 16 * 1024 * 1024;
 
+    /// <summary>Content types the image route passes on.</summary>
+    private static readonly HashSet<string> ImageTypes = new(StringComparer.Ordinal)
+    {
+        "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif",
+    };
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IServerApplicationHost _host;
     private readonly ILogger<JellyWatcherProxy> _logger;
@@ -105,7 +111,14 @@ public class JellyWatcherProxy
         }
 
         var result = await SendAsync(config, HttpMethod.Get, $"images/tmdb/{size}/{file}", null, null, cancellationToken).ConfigureAwait(false);
-        return result.Status == 200 && result.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? result : null;
+        if (result.Status != 200)
+        {
+            return null;
+        }
+
+        // Raster images only: these are served from Jellyfin's origin, where an SVG could run script.
+        var type = result.ContentType.Split(';')[0].Trim().ToLowerInvariant();
+        return ImageTypes.Contains(type) ? result with { ContentType = type } : null;
     }
 
     private static async Task<byte[]> ReadLimitedAsync(HttpContent content, CancellationToken cancellationToken)

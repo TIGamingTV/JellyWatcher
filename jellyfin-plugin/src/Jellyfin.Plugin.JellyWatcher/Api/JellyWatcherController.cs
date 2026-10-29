@@ -68,6 +68,7 @@ public class JellyWatcherController : ControllerBase
         }
 
         Response.Headers.CacheControl = "public, max-age=604800";
+        Response.Headers.XContentTypeOptions = "nosniff";
         return File(image.Body, image.ContentType);
     }
 
@@ -156,20 +157,30 @@ public class JellyWatcherController : ControllerBase
     public async Task<ActionResult> Test([FromBody] TestRequest request, CancellationToken cancellationToken)
     {
         var saved = Plugin.Instance?.Configuration ?? new PluginConfiguration();
-        var config = new PluginConfiguration
-        {
-            JellyWatcherUrl = string.IsNullOrWhiteSpace(request.JellyWatcherUrl) ? saved.JellyWatcherUrl : request.JellyWatcherUrl,
-            PluginKey = string.IsNullOrWhiteSpace(request.PluginKey) ? saved.PluginKey : request.PluginKey,
-        };
-        if (JellyWatcherApi.BaseUri(config.JellyWatcherUrl) is null)
+        var url = string.IsNullOrWhiteSpace(request.JellyWatcherUrl) ? saved.JellyWatcherUrl : request.JellyWatcherUrl;
+        if (JellyWatcherApi.BaseUri(url) is null)
         {
             return Ok(new { ok = false, message = "Enter JellyWatcher's address, starting with http:// or https://." });
         }
 
-        var result = await _proxy.SendAsync(config, HttpMethod.Get, "plugin/status", null, null, cancellationToken).ConfigureAwait(false);
-        if (result.Status != 200)
+        // The saved key is only sent to the saved address, never to a new one typed in for the test.
+        var key = request.PluginKey;
+        if (string.IsNullOrWhiteSpace(key))
         {
-            return Ok(new { ok = false, message = ErrorMessage(result) ?? $"JellyWatcher answered with status {result.Status}." });
+            if (!JellyWatcherApi.SameServer(url, saved.JellyWatcherUrl))
+            {
+                return Ok(new { ok = false, message = "Enter the plugin key to test a new address." });
+            }
+
+            key = saved.PluginKey;
+        }
+
+        var config = new PluginConfiguration { JellyWatcherUrl = url, PluginKey = key };
+
+        var result = await _proxy.SendAsync(config, HttpMethod.Get, "plugin/status", null, null, cancellationToken).ConfigureAwait(false);
+        if (result.Status != 200 || !result.ContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
+        {
+            return Ok(new { ok = false, message = ErrorMessage(result) ?? $"The address did not answer like JellyWatcher (status {result.Status})." });
         }
 
         using var doc = JsonDocument.Parse(result.Body);
@@ -205,12 +216,19 @@ public class JellyWatcherController : ControllerBase
         return (id, User.FindFirstValue(ClaimTypes.Name) ?? string.Empty);
     }
 
-    private ContentResult Result(ProxyResult r) => new()
+    private ContentResult Result(ProxyResult r)
     {
-        StatusCode = r.Status,
-        ContentType = r.ContentType,
-        Content = Encoding.UTF8.GetString(r.Body),
-    };
+        // Only JSON is passed on: whatever answers at the configured address, nothing it sends can be
+        // rendered as a page on Jellyfin's origin.
+        Response.Headers.XContentTypeOptions = "nosniff";
+        var json = r.ContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase);
+        return new ContentResult
+        {
+            StatusCode = json ? r.Status : 502,
+            ContentType = "application/json; charset=utf-8",
+            Content = json ? Encoding.UTF8.GetString(r.Body) : Encoding.UTF8.GetString(JellyWatcherProxy.Error(502, "jellywatcher_bad_answer", "The address in the plugin settings did not answer like JellyWatcher.").Body),
+        };
+    }
 
     /// <summary>Body of the connection test.</summary>
     public class TestRequest

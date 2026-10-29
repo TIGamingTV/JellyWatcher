@@ -6,6 +6,7 @@ import { nowIso } from '../db/index.js';
 import { normalizeServiceUrl } from '../http/client.js';
 import { ApiError, ProviderError } from '../http/errors.js';
 import { parse } from '../http/validate.js';
+import { scrub } from '../logger.js';
 import { JellyfinClient } from '../providers/jellyfin.js';
 import { SeerrClient } from '../providers/seerr.js';
 import { TmdbClient } from '../providers/tmdb.js';
@@ -93,7 +94,7 @@ async function testIntegration(ctx: AppContext, provider: ServerIntegration, con
       if (err.kind === 'not_found') return { ok: false, kind: err.kind, message: 'The address responded, but the API was not found. Check the URL (include any base path).' };
       return { ok: false, kind: err.kind, message: err.message };
     }
-    return { ok: false, message: (err as Error).message };
+    return { ok: false, message: scrub((err as Error).message) };
   }
 }
 
@@ -124,10 +125,34 @@ export async function integrationRoutes(app: FastifyInstance, { ctx }: AppDeps) 
     return { integrations: views.map((v) => ({ provider: v.provider, ready: v.ready, status: v.status, lastOkAt: v.lastOkAt, lastError: v.status === 'error' ? 'The service is currently unavailable.' : null })) };
   });
 
+  /**
+   * Stored secrets are only reused for the server they were entered for. Otherwise a changed address
+   * (or a hijacked admin session) could send the saved Jellyfin or Seerr API key to another host.
+   */
+  const storedSecretsFor = (provider: ServerIntegration, config: Record<string, unknown>): Record<string, string> => {
+    const stored = ctx.integrations.get(provider);
+    if (typeof config.url !== 'string') return stored.secrets;
+    const origin = (u: unknown) => {
+      try {
+        return typeof u === 'string' ? new URL(u).origin : null;
+      } catch {
+        return null;
+      }
+    };
+    return origin(config.url) !== null && origin(config.url) === origin(stored.config.url) ? stored.secrets : {};
+  };
+  const given = (secrets: Record<string, string | undefined>) => Object.fromEntries(Object.entries(secrets).filter(([, v]) => v)) as Record<string, string>;
+
   app.put('/integrations/:provider', async (req) => {
     requireAdmin(req);
     const { provider } = parse(providerParam, req.params);
     const body = parse(Schemas[provider], req.body) as { config: Record<string, unknown>; secrets: Record<string, string | undefined> };
+    const current = ctx.integrations.get(provider).secrets;
+    const reusable = storedSecretsFor(provider, body.config);
+    const missing = Object.keys(current).filter((k) => !(k in reusable) && !given(body.secrets)[k]);
+    if (missing.length > 0) {
+      throw new ApiError(400, 'secret_required', 'The server address changed. Enter the API key again to save it for the new address.');
+    }
     const saved = ctx.integrations.save(provider, body.config, body.secrets);
     const test = await testIntegration(ctx, provider, saved.config, saved.secrets);
     if (test.ok) {
@@ -139,13 +164,12 @@ export async function integrationRoutes(app: FastifyInstance, { ctx }: AppDeps) 
     return { integration: ctx.integrations.view(provider), test };
   });
 
-  /** Tests unsaved values (falls back to stored secrets when a secret field is left empty). */
+  /** Tests unsaved values (falls back to stored secrets for the same server when a secret field is left empty). */
   app.post('/integrations/:provider/test', async (req) => {
     requireAdmin(req);
     const { provider } = parse(providerParam, req.params);
     const body = parse(Schemas[provider], req.body) as { config: Record<string, unknown>; secrets: Record<string, string | undefined> };
-    const stored = ctx.integrations.get(provider).secrets;
-    const secrets = { ...stored, ...Object.fromEntries(Object.entries(body.secrets).filter(([, v]) => v)) };
+    const secrets = { ...storedSecretsFor(provider, body.config), ...given(body.secrets) };
     return { test: await testIntegration(ctx, provider, body.config, secrets) };
   });
 

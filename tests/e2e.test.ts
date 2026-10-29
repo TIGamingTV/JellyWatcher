@@ -127,6 +127,11 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     // Leaving the secret empty keeps the stored one.
     const keep = await admin.put('/api/integrations/jellyfin', { config: { url: JF.url }, secrets: { apiKey: '' } });
     expect(keep.data.test.ok).toBe(true);
+    // ...but only for the same server: the stored key is never sent to a new address.
+    const elsewhere = { config: { url: 'http://attacker.example:8096' }, secrets: { apiKey: '' } };
+    expect((await admin.put('/api/integrations/jellyfin', elsewhere)).data.error.code).toBe('secret_required');
+    expect((await admin.post('/api/integrations/jellyfin/test', elsewhere)).data.test).toMatchObject({ ok: false, message: 'Enter an API key.' });
+    expect(ctx.integrations.get('jellyfin').config.url).toBe(JF.url);
 
     const seerr = await admin.put('/api/integrations/seerr', { config: { url: SEERR.url }, secrets: { apiKey: SEERR.key } });
     expect(seerr.data.test.ok).toBe(true);
@@ -349,6 +354,13 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     const elig = await bob.get(`/api/titles/${anyTitle.id}/eligibility`);
     expect(elig.data).toMatchObject({ canRequest: false, reason: 'seerr_not_linked' });
     expect((await bob.get('/api/requests?scope=all')).data.items).toHaveLength(0);
+    // Bob sees that a title was requested, not by whom.
+    const requested = ctx.db.prepare('SELECT title_id AS id FROM requests LIMIT 1').get() as { id: number };
+    const forBob = (await bob.get(`/api/titles/${requested.id}`)).data;
+    expect(forBob.requests.length).toBeGreaterThan(0);
+    expect(forBob.requests.every((r: any) => r.requestedBy === null && r.userId === undefined && r.mine === false)).toBe(true);
+    expect(forBob.status.request.requestedBy).toBeNull();
+    expect((await admin.get(`/api/titles/${requested.id}`)).data.requests[0].requestedBy).not.toBeNull();
   });
 
   it('keeps the last known library when Jellyfin is down and marks it stale', async () => {
@@ -378,6 +390,9 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     expect((await admin.get('/api/images/tmdb/original/past.jpg')).status).toBe(400);
     expect((await admin.get('/api/images/tmdb/w342/..%2F..%2Fetc%2Fpasswd')).status).toBe(400);
     expect((await new Client(app).get('/api/images/tmdb/w342/past.jpg')).status).toBe(401);
+    // Jellyfin artwork only for items of the indexed library.
+    expect((await admin.get(`/api/images/jellyfin/${HEAT_JF}?tag=p1`)).status).toBe(200);
+    expect((await admin.get(`/api/images/jellyfin/${'a'.repeat(32)}`)).status).toBe(404);
   });
 
   it('never leaks secrets in diagnostics or sync history', async () => {
@@ -443,8 +458,11 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     }
     // A session cookie does not widen a plugin request.
     expect((await admin.req('GET', '/api/admin/users', undefined, { headers: h(ALICE_JF) })).status).toBe(403);
-    // Public TMDb artwork works with the key alone (for <img> tags).
+    // Public TMDb artwork works with the key alone (for <img> tags), but only for known titles.
     expect((await plugin('GET', '/api/images/tmdb/w342/past.jpg', h())).status).toBe(200);
+    expect((await plugin('GET', '/api/images/tmdb/w185/heat.jpg', h())).status).toBe(200);
+    expect((await plugin('GET', '/api/images/tmdb/w185/not-a-poster-here.jpg', h())).status).toBe(404);
+    expect((await admin.get('/api/images/tmdb/w185/not-a-poster-here.jpg')).status).toBe(200);
 
     // Unknown Jellyfin users follow the sign-in rules: refused, or created when allowed.
     const stranger = 'f'.repeat(32);

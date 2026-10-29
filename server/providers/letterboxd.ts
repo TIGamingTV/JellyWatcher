@@ -12,8 +12,8 @@ import type { ListFetchResult, SourceItem, SourceListInfo } from './types.js';
  * public RSS feed (recent diary entries, which include TMDb ids).
  */
 
-const MAX_ZIP_ENTRIES = 2000;
-const MAX_UNZIPPED_BYTES = 80 * 1024 * 1024;
+export const MAX_ZIP_ENTRIES = 2000;
+export const MAX_UNZIPPED_BYTES = 80 * 1024 * 1024;
 
 export const LETTERBOXD_USERNAME = /^[A-Za-z0-9_]{1,40}$/;
 

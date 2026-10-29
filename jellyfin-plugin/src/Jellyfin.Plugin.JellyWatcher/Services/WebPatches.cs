@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Jellyfin.Plugin.JellyWatcher.Configuration;
 
 namespace Jellyfin.Plugin.JellyWatcher.Services;
@@ -21,6 +22,8 @@ public static class WebPatches
     public const string PageRoute = "#/jellywatcher";
 
     private const string Marker = "data-jellywatcher";
+
+    private static readonly Regex IconName = new("^[a-z0-9_]{1,40}$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
 
     /// <summary>File Transformation callback for index.html.</summary>
     /// <param name="payload">Current contents.</param>
@@ -109,7 +112,12 @@ public static class WebPatches
         }
 
         var label = string.IsNullOrWhiteSpace(config.MenuLabel) ? "Watchlists" : config.MenuLabel.Trim();
-        var icon = string.IsNullOrWhiteSpace(config.MenuIcon) ? "bookmarks" : config.MenuIcon.Trim();
+        // jellyfin-web puts the icon name into a class attribute: only plain Material icon names.
+        var icon = config.MenuIcon?.Trim() ?? string.Empty;
+        if (!IconName.IsMatch(icon))
+        {
+            icon = "bookmarks";
+        }
         links.Add(new JsonObject { ["name"] = label, ["icon"] = icon, ["url"] = PageRoute });
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
