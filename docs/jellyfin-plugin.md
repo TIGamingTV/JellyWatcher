@@ -50,7 +50,7 @@ Manual install: download `jellywatcher_<version>.zip` from the
 [release](https://github.com/TIGamingTV/JellyWatcher/releases), unpack it into a folder in Jellyfin's
 `plugins` directory and restart Jellyfin.
 
-The plugin version follows JellyWatcher with a fourth part: JellyWatcher 0.6.0 ↔ plugin 0.6.0.0.
+The plugin version follows JellyWatcher with a fourth part: JellyWatcher 0.7.0 ↔ plugin 0.7.0.0.
 Keep both on the same version.
 
 ## Collections and playlists
