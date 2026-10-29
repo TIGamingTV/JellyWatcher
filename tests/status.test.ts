@@ -61,3 +61,19 @@ describe('lifecycleStage', () => {
     expect(lifecycleStage('unknown', 'available', 'unavailable')).toBe('reported_available');
   });
 });
+
+describe('entryRequestable', () => {
+  const base = { matched: true, state: 'unwatched', skipped: false, kind: 'movie', stage: 'listed' as const };
+  it('offers a request for listed, declined and failed entries only', async () => {
+    const { entryRequestable } = await import('../shared/status');
+    expect(entryRequestable(base)).toBe(true);
+    expect(entryRequestable({ ...base, stage: 'failed' })).toBe(true);
+    expect(entryRequestable({ ...base, stage: 'requested' })).toBe(false);
+    expect(entryRequestable({ ...base, stage: 'in_library' })).toBe(false);
+    expect(entryRequestable({ ...base, skipped: true })).toBe(false);
+    expect(entryRequestable({ ...base, state: 'watched' })).toBe(false);
+    expect(entryRequestable({ ...base, matched: false })).toBe(false);
+    expect(entryRequestable({ ...base, stage: 'partially_available' })).toBe(false);
+    expect(entryRequestable({ ...base, kind: 'season', stage: 'partially_available' })).toBe(true);
+  });
+});

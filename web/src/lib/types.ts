@@ -125,6 +125,17 @@ export interface TimelineEntry {
   watchedAt: string | null;
   /** Marked "Not Watching": Up Next passes over it. */
   skipped: boolean;
+  /** Jellyfin item to open (the episode for episode entries); null when not in the library. */
+  jellyfinItemId: string | null;
+}
+
+export interface JellyfinPluginView {
+  enabled: boolean;
+  key: string | null;
+  repositoryUrl: string;
+  fileTransformationRepositoryUrl: string;
+  lastSeen: { at: string; version: string | null; jellyfinServerId: string | null } | null;
+  jellyfinServerId: string | null;
 }
 
 export interface Timeline {

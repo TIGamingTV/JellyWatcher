@@ -1,7 +1,8 @@
 name: Build and release
 
-# - Pull requests and pushes to main: test and build the image (not pushed).
-# - Tags v*.*.*: test, build and push the multi-arch image to GHCR, then publish a GitHub release.
+# - Pull requests and pushes to main: test, build the image (not pushed) and the Jellyfin plugin zip.
+# - Tags v*.*.*: test, build and push the multi-arch image to GHCR, publish a GitHub release with
+#   the Jellyfin plugin zip, then add that plugin version to jellyfin-plugin/manifest.json on main.
 on:
   push:
     branches: [main]
@@ -28,9 +29,19 @@ jobs:
           node-version: 24
           cache: npm
 
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
+
+      - name: Jellyfin plugin tests
+        run: dotnet test jellyfin-plugin --configuration Release
+
+      - name: Check plugin version matches package.json
+        run: node scripts/plugin.mjs check
 
       - name: Check tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/v')
@@ -40,6 +51,35 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $pkg"
             exit 1
           fi
+
+  plugin:
+    name: Jellyfin plugin
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Build the plugin zip
+        run: node scripts/plugin.mjs pack
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jellyfin-plugin
+          path: |
+            dist/plugin/*.zip
+            dist/plugin/*.md5
+          if-no-files-found: error
 
   image:
     name: Docker image
@@ -104,13 +144,18 @@ jobs:
 
   release:
     name: GitHub release
-    needs: image
+    needs: [image, plugin]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: jellyfin-plugin
+          path: dist/plugin
 
       - name: Create release
         env:
@@ -132,12 +177,56 @@ jobs:
           Platforms: \`linux/amd64\`, \`linux/arm64\` · Digest: \`${DIGEST}\`
 
           See the [README](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md#install) for setup instructions.
+
+          ## Jellyfin plugin (optional)
+
+          In Jellyfin › Dashboard › Plugins › Repositories add
+          \`https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/jellyfin-plugin/manifest.json\`
+          and the File Transformation repository, then install JellyWatcher \`${version}.0\`.
+          See [the plugin guide](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/jellyfin-plugin.md).
+          The zip below is for manual installs.
           EOF
           )
 
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" dist/plugin/*.zip \
             --title "JellyWatcher $GITHUB_REF_NAME" \
             --notes "$notes" \
             --generate-notes \
             --verify-tag \
             $prerelease
+
+  plugin-repository:
+    name: Publish plugin to the repository manifest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: jellyfin-plugin
+          path: dist/plugin
+
+      - name: Add the release to jellyfin-plugin/manifest.json
+        run: |
+          zip=$(ls dist/plugin/*.zip)
+          name=$(basename "$zip")
+          node scripts/plugin.mjs manifest "$zip" "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${name}"
+          if git diff --quiet -- jellyfin-plugin/manifest.json; then
+            echo "Manifest already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add jellyfin-plugin/manifest.json
+          git commit -m "chore(plugin): publish ${GITHUB_REF_NAME#v}.0 to the plugin repository [skip ci]"
+          git push origin HEAD:main

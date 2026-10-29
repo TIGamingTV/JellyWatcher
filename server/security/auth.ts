@@ -26,6 +26,8 @@ declare module 'fastify' {
     user: SessionUser | null;
     sessionId: string | null;
     csrfToken: string | null;
+    /** Sent by the JellyWatcher plugin for Jellyfin (server-to-server, no cookie). */
+    viaPlugin: boolean;
   }
 }
 
@@ -119,12 +121,15 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** Endpoints that are called before a session exists or by other servers; protected by other means. */
 const CSRF_EXEMPT = [/^\/api\/auth\/login$/, /^\/api\/auth\/jellyfin$/, /^\/api\/auth\/quick-connect(\/(poll|cancel))?$/, /^\/api\/setup(\/[a-z/-]+)?$/, /^\/api\/webhooks\//];
 
-export function registerAuth(app: FastifyInstance, ctx: AppContext, sessions: SessionService): void {
+export function registerAuth(app: FastifyInstance, ctx: AppContext, sessions: SessionService, pluginAuth?: (req: FastifyRequest) => Promise<boolean>): void {
   app.decorateRequest('user', null);
   app.decorateRequest('sessionId', null);
   app.decorateRequest('csrfToken', null);
+  app.decorateRequest('viaPlugin', false);
 
   app.addHook('onRequest', async (req) => {
+    // Plugin requests are authenticated by their key alone; a cookie is never mixed in.
+    if (pluginAuth && (await pluginAuth(req))) return;
     const token = req.cookies[SESSION_COOKIE];
     if (!token) return;
     const s = sessions.lookup(token);
@@ -136,6 +141,8 @@ export function registerAuth(app: FastifyInstance, ctx: AppContext, sessions: Se
 
   app.addHook('preHandler', async (req) => {
     if (SAFE_METHODS.has(req.method) || !req.url.startsWith('/api/')) return;
+    // No cookie, so no cross-site risk: the plugin key is a server-side secret.
+    if (req.viaPlugin) return;
     const path = req.url.split('?')[0]!;
     if (path.startsWith('/api/webhooks/')) return;
     // Cross-site request check: an Origin header, when sent, must match this server.

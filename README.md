@@ -85,7 +85,7 @@ The database is backed up to `data/backups/` and migrated automatically on start
 - **Your order:** drag entries around, or **Auto Sort** a list into release order (or newest first,
   title, runtime). Your order survives syncs and can be reset.
 - **Up Next:** the next entry of every list on Home, with **Watch**, **Request**, **Watched** and
-  **Skip**.
+  **Skip**. Timelines have a **Request** button on every entry that can be requested.
 - **Watched and Not Watching:** mark movies, shows, seasons or episodes as watched with a date, or
   skip what you don't want to see so Up Next moves on. Jellyfin progress is picked up automatically
   and stays even after a file is deleted.
@@ -95,6 +95,9 @@ The database is backed up to `data/backups/` and migrated automatically on start
   and a review queue for anything uncertain. Your decisions are remembered.
 - **Multi-user:** everyone signs in with their Jellyfin account (password or Quick Connect); lists
   are private per person.
+- **Inside Jellyfin (optional):** the [Jellyfin plugin](docs/jellyfin-plugin.md) adds a Watchlists
+  page to Jellyfin's menu with your lists, their timelines, and Play, Request, Not Watching and
+  Watched on every entry.
 - **Homelab-friendly:** one container, SQLite with automatic backups, non-root and read-only,
   encrypted credentials, health check, optional webhooks. Works on phones, tablets and desktops.
 
@@ -135,6 +138,7 @@ Details and verified limits per service: [docs/integration-matrix.md](docs/integ
 | [Operations](docs/operations.md) | Backups, upgrades, reverse proxy, networking, troubleshooting. |
 | [Architecture](docs/architecture.md) | Design, data model, matching, security. |
 | [Integration matrix](docs/integration-matrix.md) | What each service allows, and what is unsupported and why. |
+| [Jellyfin plugin](docs/jellyfin-plugin.md) | The optional Watchlists page inside Jellyfin: install, security, limits. |
 
 ## Development
 
@@ -147,7 +151,9 @@ npm run build
 
 Releases: set `version` in `package.json` and push a matching tag (`git tag v0.4.1 && git push origin
 v0.4.1`). The [release workflow](.github/workflows/release.yml) tests, publishes the multi-arch image
-to GHCR and creates the GitHub release.
+to GHCR, creates the GitHub release with the Jellyfin plugin zip and adds the plugin version to
+[`jellyfin-plugin/manifest.json`](jellyfin-plugin/manifest.json). The plugin version is the
+JellyWatcher version plus `.0` (set `<Version>` in the plugin's `.csproj`; CI checks they match).
 
 ## Attribution
 

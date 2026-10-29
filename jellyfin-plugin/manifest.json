@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "b3ad8b8e-844c-4e75-ab0c-caa0b5faeff8",
+    "name": "JellyWatcher",
+    "description": "Adds a Watchlists page to Jellyfin's menu: add lists by link, follow each list's timeline, and request (Seerr), skip or mark entries as watched without leaving Jellyfin. Needs a JellyWatcher server (https://github.com/TIGamingTV/JellyWatcher) and the File Transformation plugin.",
+    "overview": "Your JellyWatcher watchlists and timelines inside Jellyfin",
+    "owner": "TIGamingTV",
+    "category": "General",
+    "imageUrl": "https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/assets/jellyfin-plugin.png",
+    "versions": []
+  }
+]

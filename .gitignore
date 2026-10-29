@@ -6,3 +6,7 @@ data/
 *.log
 coverage/
 .DS_Store
+.e2e/
+jellyfin-plugin/**/bin/
+jellyfin-plugin/**/obj/
+jellyfin-plugin/src/Jellyfin.Plugin.JellyWatcher/Web/client.js

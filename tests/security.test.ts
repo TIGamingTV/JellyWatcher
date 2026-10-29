@@ -56,7 +56,24 @@ describe('passwords', () => {
 describe('scrub', () => {
   it('removes credentials from free text', () => {
     expect(scrub('Authorization: MediaBrowser Token="abc123", Client="x"')).not.toContain('abc123');
+    expect(scrub('plugin key jwp_AbCdEf123456_-x rejected')).not.toContain('AbCdEf123456');
     expect(scrub('Bearer eyJhbGciOiJIUzI1NiJ9.x.y failed')).toBe('Bearer [redacted] failed');
     expect(scrub('GET /x?api_key=SECRET&page=2')).toBe('GET /x?api_key=[redacted]&page=2');
+  });
+});
+
+describe('plugin route allowlist', () => {
+  it('allows only the Watchlists page routes', async () => {
+    const { pluginRouteFor } = await import('../server/security/plugin');
+    expect(pluginRouteFor('GET', '/api/lists')?.user).toBe(true);
+    expect(pluginRouteFor('GET', '/api/lists/12/timeline?x=1')).not.toBeNull();
+    expect(pluginRouteFor('PUT', '/api/titles/3/skipped/')).not.toBeNull();
+    expect(pluginRouteFor('GET', '/api/images/tmdb/w342/abc.jpg')?.user).toBe(false);
+    expect(pluginRouteFor('GET', '/api/images/tmdb/w342/..%2Fetc')).toBeNull();
+    expect(pluginRouteFor('DELETE', '/api/lists/12')).toBeNull();
+    expect(pluginRouteFor('PATCH', '/api/lists/12')).toBeNull();
+    expect(pluginRouteFor('GET', '/api/admin/users')).toBeNull();
+    expect(pluginRouteFor('GET', '/api/lists/12/../../admin/users')).toBeNull();
+    expect(pluginRouteFor('POST', '/api/lists/upload')).toBeNull();
   });
 });

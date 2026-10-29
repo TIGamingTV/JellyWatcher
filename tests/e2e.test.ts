@@ -389,6 +389,84 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     }
   });
 
+  it('lets the Jellyfin plugin act for linked people with its key, and nothing else', async () => {
+    const plugin = (method: string, url: string, headers: Record<string, string>, body?: unknown) => new Client(app).req(method, url, body, { headers });
+    expect((await admin.get('/api/integrations/jellyfin-plugin')).data).toMatchObject({ enabled: false, key: null, lastSeen: null });
+    // Off until an administrator creates a key.
+    expect((await plugin('GET', '/api/plugin/status', { 'x-jw-plugin-key': 'jwp_guess' })).status).toBe(401);
+    const on = await admin.post('/api/integrations/jellyfin-plugin');
+    expect(on.data.enabled).toBe(true);
+    expect(on.data.repositoryUrl).toMatch(/jellyfin-plugin\/manifest\.json$/);
+    const key: string = on.data.key;
+    const h = (user?: string, extra: Record<string, string> = {}) => ({
+      'x-jw-plugin-key': key,
+      'x-jw-plugin-version': '0.5.0.0',
+      'x-jw-jellyfin-server': 'srv1',
+      ...(user ? { 'x-jw-jellyfin-user': user, 'x-jw-jellyfin-name': 'alice' } : {}),
+      ...extra,
+    });
+
+    expect((await plugin('GET', '/api/plugin/status', h())).data).toMatchObject({ ok: true, jellyfin: { ready: true, serverId: 'srv1' } });
+    expect((await plugin('GET', '/api/plugin/status', {})).status).toBe(401);
+    expect((await plugin('GET', '/api/lists', h(ALICE_JF, { 'x-jw-plugin-key': `${key}x` }))).status).toBe(401);
+    expect((await plugin('GET', '/api/lists', h())).data.error.code).toBe('plugin_user');
+
+    // Jellyfin ids with dashes match too.
+    const dashed = ALICE_JF.replace(/^(.{8})(.{4})(.{4})(.{4})/, '$1-$2-$3-$4-');
+    const lists = await plugin('GET', '/api/lists', h(dashed));
+    expect(lists.status).toBe(200);
+    expect(lists.data.lists.map((l: any) => l.id)).toContain(imdbListId);
+    const boot = await plugin('GET', '/api/plugin/bootstrap', h(ALICE_JF));
+    expect(boot.data).toMatchObject({ user: { username: 'admin' }, seerr: { available: true, linked: true }, trakt: { connected: false } });
+
+    const tl = await plugin('GET', `/api/lists/${imdbListId}/timeline`, h(ALICE_JF));
+    expect(tl.data.entries.map((e: any) => e.jellyfinItemId)).toEqual([HEAT_JF, 'e101'.padEnd(32, '0'), null, SEV_JF]);
+
+    // Writes need no CSRF token or cookie.
+    const thief = tl.data.entries[2].title.id;
+    expect((await plugin('PUT', `/api/titles/${thief}/skipped`, h(ALICE_JF), { skipped: true })).data).toMatchObject({ ok: true, skipped: true });
+    expect((await plugin('PUT', `/api/titles/${thief}/skipped`, h(ALICE_JF), { skipped: false })).data).toMatchObject({ ok: true, skipped: false });
+    expect((await plugin('GET', `/api/titles/${thief}/eligibility`, h(ALICE_JF))).data.canRequest).toBe(true);
+
+    // Only the Watchlists page's routes, never administration (Alice is an administrator here).
+    for (const [m, u] of [
+      ['GET', '/api/admin/users'],
+      ['GET', '/api/integrations'],
+      ['GET', '/api/integrations/jellyfin-plugin'],
+      ['POST', '/api/integrations/jellyfin-plugin'],
+      ['GET', '/api/auth/me'],
+      ['GET', '/api/admin/backup'],
+      ['DELETE', `/api/lists/${imdbListId}`],
+      ['GET', '/api/images/jellyfin/' + HEAT_JF],
+    ] as const) {
+      expect((await plugin(m, u, h(ALICE_JF))).status, `${m} ${u}`).toBe(403);
+    }
+    // A session cookie does not widen a plugin request.
+    expect((await admin.req('GET', '/api/admin/users', undefined, { headers: h(ALICE_JF) })).status).toBe(403);
+    // Public TMDb artwork works with the key alone (for <img> tags).
+    expect((await plugin('GET', '/api/images/tmdb/w342/past.jpg', h())).status).toBe(200);
+
+    // Unknown Jellyfin users follow the sign-in rules: refused, or created when allowed.
+    const stranger = 'f'.repeat(32);
+    expect((await plugin('GET', '/api/lists', h(stranger))).data.error.code).toBe('not_invited');
+    await admin.put('/api/admin/settings', { 'auth.jellyfinAutoCreate': true });
+    const created = await plugin('GET', '/api/plugin/bootstrap', h(stranger, { 'x-jw-jellyfin-name': encodeURIComponent('Zoë Example') }));
+    expect(created.data.user).toMatchObject({ username: 'ZoExample', displayName: 'Zoë Example' });
+    await admin.put('/api/admin/settings', { 'auth.jellyfinAutoCreate': false });
+
+    const view = (await admin.get('/api/integrations/jellyfin-plugin')).data;
+    expect(view.lastSeen).toMatchObject({ version: '0.5.0.0', jellyfinServerId: 'srv1' });
+    expect(view.key).toBe(key);
+
+    // A new key stops the old one; turning it off stops all.
+    const next = (await admin.post('/api/integrations/jellyfin-plugin')).data.key;
+    expect(next).not.toBe(key);
+    expect((await plugin('GET', '/api/lists', h(ALICE_JF))).status).toBe(401);
+    expect((await plugin('GET', '/api/lists', h(ALICE_JF, { 'x-jw-plugin-key': next }))).status).toBe(200);
+    expect((await admin.del('/api/integrations/jellyfin-plugin')).data.enabled).toBe(false);
+    expect((await plugin('GET', '/api/lists', h(ALICE_JF, { 'x-jw-plugin-key': next }))).status).toBe(401);
+  });
+
   it('marks a movie as watched on a chosen date and takes the mark back', async () => {
     const thief = (await admin.get('/api/catalog?q=thief')).data.items[0];
     expect(thief.viewing).not.toBe('watched');

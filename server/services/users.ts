@@ -23,8 +23,12 @@ export class UserService {
     return row ? toSessionUser(row) : null;
   }
 
+  /** Jellyfin writes user ids with or without dashes depending on the API; both forms match. */
   byJellyfinId(jellyfinUserId: string) {
-    return this.db.prepare('SELECT * FROM users WHERE jellyfin_user_id = ?').get(jellyfinUserId) as
+    const compact = jellyfinUserId.replace(/-/g, '').toLowerCase();
+    return this.db
+      .prepare("SELECT * FROM users WHERE jellyfin_user_id = ? OR REPLACE(LOWER(jellyfin_user_id), '-', '') = ? ORDER BY jellyfin_user_id = ? DESC LIMIT 1")
+      .get(jellyfinUserId, compact, jellyfinUserId) as
       | (Parameters<typeof toSessionUser>[0] & { disabled: number })
       | undefined;
   }

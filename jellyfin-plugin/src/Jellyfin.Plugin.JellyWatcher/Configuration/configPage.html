@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JellyWatcher</title>
+</head>
+<body>
+    <div id="JellyWatcherConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <h2 class="sectionTitle">JellyWatcher</h2>
+                <p>Shows a Watchlists page in Jellyfin's menu with each person's JellyWatcher lists and their timelines. People use it with their Jellyfin account; JellyWatcher applies the same rules as signing in with Jellyfin.</p>
+                <div id="jwSetupWarning" class="infoBanner" style="display:none; margin-bottom: 1.5em;">
+                    The <b>File Transformation</b> plugin is not installed, so the Watchlists page cannot appear in Jellyfin yet.
+                    Add the repository <code>https://www.iamparadox.dev/jellyfin/plugins/manifest.json</code>, install File Transformation, and restart Jellyfin.
+                </div>
+                <form id="JellyWatcherConfigForm">
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="jwEnabled" name="Enabled" type="checkbox" is="emby-checkbox" />
+                            <span>Show the Watchlists page</span>
+                        </label>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="url" id="jwUrl" required label="JellyWatcher address" placeholder="http://jellywatcher:8484" />
+                        <div class="fieldDescription">The address Jellyfin's server uses to reach JellyWatcher, e.g. the container name on the same Docker network. Include any base path.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="password" id="jwKey" autocomplete="off" label="Plugin key" />
+                        <div class="fieldDescription">From JellyWatcher › Integrations › Jellyfin › Jellyfin Plugin. Leave empty to keep the saved key.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="url" id="jwPublicUrl" label="JellyWatcher browser address (optional)" placeholder="https://watch.example.com" />
+                        <div class="fieldDescription">Used for “Open in JellyWatcher” links when JellyWatcher has no JW_PUBLIC_URL set.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="jwMenuLabel" maxlength="40" label="Menu name" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="jwMenuIcon" maxlength="40" label="Menu icon" />
+                        <div class="fieldDescription">A Material icon name, e.g. bookmarks, list or movie.</div>
+                    </div>
+                    <div id="jwTestResult" class="fieldDescription" style="margin: 0 0 1em; display:none;"></div>
+                    <div>
+                        <button is="emby-button" type="button" id="jwTest" class="raised button-alt block emby-button">
+                            <span>Test Connection</span>
+                        </button>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                    <p class="fieldDescription">After changing the menu name or turning the page on or off, reload Jellyfin in the browser.</p>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function () {
+                var pluginId = 'b3ad8b8e-844c-4e75-ab0c-caa0b5faeff8';
+                var page = document.querySelector('#JellyWatcherConfigPage');
+                var $ = function (id) { return page.querySelector('#' + id); };
+
+                function showTest(ok, message) {
+                    var el = $('jwTestResult');
+                    el.style.display = 'block';
+                    el.style.color = ok ? '#52b54b' : '#ff6e6e';
+                    el.textContent = message;
+                }
+
+                page.addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        $('jwEnabled').checked = config.Enabled !== false;
+                        $('jwUrl').value = config.JellyWatcherUrl || '';
+                        $('jwKey').value = '';
+                        $('jwKey').setAttribute('placeholder', config.PluginKey ? 'Saved (hidden)' : 'jwp_…');
+                        $('jwPublicUrl').value = config.PublicUrl || '';
+                        $('jwMenuLabel').value = config.MenuLabel || 'Watchlists';
+                        $('jwMenuIcon').value = config.MenuIcon || 'bookmarks';
+                        Dashboard.hideLoadingMsg();
+                    });
+                    ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('JellyWatcher/Setup'), dataType: 'json' }).then(function (s) {
+                        $('jwSetupWarning').style.display = s.fileTransformation ? 'none' : 'block';
+                    }, function () { /* ignore */ });
+                });
+
+                $('jwTest').addEventListener('click', function () {
+                    showTest(true, 'Testing…');
+                    ApiClient.ajax({
+                        type: 'POST',
+                        url: ApiClient.getUrl('JellyWatcher/Test'),
+                        data: JSON.stringify({ JellyWatcherUrl: $('jwUrl').value.trim(), PluginKey: $('jwKey').value.trim() }),
+                        contentType: 'application/json',
+                        dataType: 'json'
+                    }).then(function (r) { showTest(r.ok, r.message); }, function () { showTest(false, 'The test could not run.'); });
+                });
+
+                $('JellyWatcherConfigForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        config.Enabled = $('jwEnabled').checked;
+                        config.JellyWatcherUrl = $('jwUrl').value.trim();
+                        if ($('jwKey').value.trim()) config.PluginKey = $('jwKey').value.trim();
+                        config.PublicUrl = $('jwPublicUrl').value.trim();
+                        config.MenuLabel = $('jwMenuLabel').value.trim() || 'Watchlists';
+                        config.MenuIcon = $('jwMenuIcon').value.trim() || 'bookmarks';
+                        ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                            $('jwKey').value = '';
+                            $('jwKey').setAttribute('placeholder', config.PluginKey ? 'Saved (hidden)' : 'jwp_…');
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                        });
+                    });
+                    return false;
+                });
+            })();
+        </script>
+    </div>
+</body>
+</html>
