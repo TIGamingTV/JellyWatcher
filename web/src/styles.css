@@ -537,6 +537,8 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
 .tl-body .progress { max-width: 260px; height: 4px; margin-top: 6px; }
 .tl-side { display: flex; flex-direction: row; align-items: center; justify-content: flex-end; gap: 8px; }
 .tl-side:empty { display: none; }
+.tl-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.tl-request { white-space: nowrap; }
 @media (max-width: 599px) {
   .tl-item { grid-template-columns: 28px 42px minmax(0, 1fr); gap: 10px; }
   .tl-item::before { left: 13px; }
@@ -545,7 +547,7 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
   /* Phones: the status pill moves under the title, the watched toggle stays on the first line. */
   .tl-item { grid-template-columns: 28px 42px minmax(0, 1fr) auto; row-gap: 6px; }
   .tl-side { display: contents; }
-  .tl-side > .pill { grid-column: 3; grid-row: 2; justify-self: start; }
+  .tl-side > .pill, .tl-side > .tl-status { grid-column: 3; grid-row: 2; justify-self: start; justify-content: flex-start; }
   .tl-side > .tl-actions, .tl-side > .tl-remove { grid-column: 4; grid-row: 1; }
 }
 

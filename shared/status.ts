@@ -212,6 +212,17 @@ export function lifecycleStage(
   }
 }
 
+/**
+ * Whether a timeline entry offers a Request button: it is matched, not watched or skipped, and
+ * nothing is on its way yet (or, for parts of a show, the show is only partly there). Seerr has the
+ * final word when the request sheet opens.
+ */
+export function entryRequestable(e: { matched: boolean; state: string; skipped: boolean; kind: string; stage: LifecycleStage }): boolean {
+  if (!e.matched || e.state === 'watched' || e.skipped) return false;
+  if (e.stage === 'listed' || e.stage === 'declined' || e.stage === 'failed') return true;
+  return e.kind !== 'movie' && e.stage === 'partially_available';
+}
+
 export const STAGE_LABEL: Record<LifecycleStage, string> = {
   watched: 'Watched',
   in_progress: 'In Progress',

@@ -10,6 +10,7 @@ import type { AppContext } from './context.js';
 import { ApiError, ProviderError } from './http/errors.js';
 import { scrub } from './logger.js';
 import { registerAuth, SessionService } from './security/auth.js';
+import { authenticatePluginRequest, PluginKeys } from './security/plugin.js';
 import { UserService } from './services/users.js';
 import { QuickConnectStore } from './services/quickconnect.js';
 import { authRoutes } from './routes/auth.js';
@@ -20,6 +21,7 @@ import { catalogRoutes } from './routes/catalog.js';
 import { imageRoutes } from './routes/images.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { watchRoutes } from './routes/watch.js';
+import { pluginRoutes } from './routes/plugin.js';
 
 export interface AppDeps {
   ctx: AppContext;
@@ -27,6 +29,7 @@ export interface AppDeps {
   sessions: SessionService;
   setupCode: () => string | null;
   quickConnect: QuickConnectStore;
+  pluginKeys: PluginKeys;
 }
 
 export async function buildApp(ctx: AppContext, opts: { setupCode: () => string | null; serveWeb?: boolean } ): Promise<FastifyInstance> {
@@ -65,12 +68,14 @@ export async function buildApp(ctx: AppContext, opts: { setupCode: () => string 
     strictTransportSecurity: false,
     crossOriginEmbedderPolicy: false,
   });
-  await app.register(rateLimit, { global: false });
+  // Plugin requests all come from the Jellyfin server, so they are limited per person instead of per IP.
+  await app.register(rateLimit, { global: false, keyGenerator: (req) => (req.viaPlugin ? `plugin:${req.user?.id ?? 'server'}` : req.ip) });
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 10 } });
 
   const users = new UserService(ctx.db);
   const sessions = new SessionService(ctx, ctx.config.sessionTtlDays);
-  registerAuth(app, ctx, sessions);
+  const pluginKeys = new PluginKeys(ctx);
+  registerAuth(app, ctx, sessions, (req) => authenticatePluginRequest(req, ctx, pluginKeys, users));
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof ApiError) {
@@ -95,7 +100,7 @@ export async function buildApp(ctx: AppContext, opts: { setupCode: () => string 
     return { status: 'ok', version: ctx.config.version };
   });
 
-  const deps: AppDeps = { ctx, users, sessions, setupCode: opts.setupCode, quickConnect: new QuickConnectStore() };
+  const deps: AppDeps = { ctx, users, sessions, setupCode: opts.setupCode, quickConnect: new QuickConnectStore(), pluginKeys };
   await app.register(async (api) => {
     await authRoutes(api, deps);
     await adminRoutes(api, deps);
@@ -105,6 +110,7 @@ export async function buildApp(ctx: AppContext, opts: { setupCode: () => string 
     await imageRoutes(api, deps);
     await webhookRoutes(api, deps);
     await watchRoutes(api, deps);
+    await pluginRoutes(api, deps);
   }, { prefix: '/api' });
 
   app.setNotFoundHandler((req, reply) => {

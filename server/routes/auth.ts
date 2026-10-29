@@ -10,6 +10,7 @@ import { randomToken, safeEqual } from '../security/crypto.js';
 import { verifyPassword } from '../security/passwords.js';
 import { SOURCE_DESCRIPTORS } from '../providers/types.js';
 import { QUICK_CONNECT_POLL_MS } from '../services/quickconnect.js';
+import { accountForJellyfinUser, usernameFromJellyfin } from '../services/jellyfin-accounts.js';
 import { triggerJob } from '../sync/scheduler.js';
 
 const LOGIN_LIMIT = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
@@ -25,11 +26,7 @@ const ServerUrl = z.string().trim().min(1).max(500).transform((v, c) => {
   }
 });
 
-/** Usernames in JellyWatcher allow fewer characters than Jellyfin's. */
-export function usernameFromJellyfin(name: string, userId: string): string {
-  const clean = name.replace(/[^A-Za-z0-9._@-]/g, '').slice(0, 60);
-  return clean.length >= 2 ? clean : `jellyfin-${userId.slice(0, 8)}`;
-}
+export { usernameFromJellyfin };
 
 export async function authRoutes(app: FastifyInstance, { ctx, users, sessions, setupCode, quickConnect }: AppDeps) {
   const startSession = (req: FastifyRequest, reply: FastifyReply, userId: number) => {
@@ -54,26 +51,7 @@ export async function authRoutes(app: FastifyInstance, { ctx, users, sessions, s
   };
 
   /** Finds (or, when allowed, creates) the JellyWatcher account of a verified Jellyfin user. */
-  const accountFor = async (verified: Pick<JellyfinSignIn, 'userId' | 'name' | 'disabled'>) => {
-    if (verified.disabled) throw new ApiError(403, 'disabled', 'This Jellyfin account is disabled.');
-    let row = users.byJellyfinId(verified.userId);
-    if (!row) {
-      if (!ctx.settings.get('auth.jellyfinAutoCreate')) {
-        throw new ApiError(403, 'not_invited', 'Your Jellyfin account has no JellyWatcher account yet. Ask an administrator to add you.');
-      }
-      let username = usernameFromJellyfin(verified.name, verified.userId);
-      if (users.byUsername(username)) username = `${username.slice(0, 60)}-jf`;
-      if (users.byUsername(username)) username = `jellyfin-${verified.userId.slice(0, 12)}`;
-      const id = await users.create({ username, displayName: verified.name, role: 'user', authSource: 'jellyfin', jellyfinUserId: verified.userId, jellyfinUsername: verified.name });
-      row = users.byJellyfinId(verified.userId)!;
-      ctx.log.info({ userId: id }, 'account created from Jellyfin sign-in');
-      void triggerJob(ctx, 'jellyfin', 'event');
-    } else if (row.jellyfin_username !== verified.name) {
-      users.update(row.id, { jellyfinUsername: verified.name });
-    }
-    if (row.disabled) throw new ApiError(403, 'disabled', 'This account is disabled. Contact an administrator.');
-    return row;
-  };
+  const accountFor = (verified: Pick<JellyfinSignIn, 'userId' | 'name' | 'disabled'>) => accountForJellyfinUser(ctx, users, verified);
 
   /**
    * Guided setup, like Seerr: a Jellyfin administrator signs in, JellyWatcher creates its own API

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Copy, ExternalLink, Eye, EyeOff, RefreshCw, Smartphone } from 'lucide-react';
 import { del, errorText, get, post, put } from '../lib/api';
 import { useRefreshMe, useToast, useUser } from '../lib/session';
-import type { IntegrationView, QuickConnectStart, SourceId, SourcesResponse, SyncRun, TestResult, UploadSource } from '../lib/types';
+import type { IntegrationView, JellyfinPluginView, QuickConnectStart, SourceId, SourcesResponse, SyncRun, TestResult, UploadSource } from '../lib/types';
 import { plural } from '../lib/format';
 import { Banner, CenterLoading, ConfirmSheet, Field, PageHeader, ProviderMark, Spinner, SyncButton, Time, Toggle } from '../components/ui';
 import { AddListSheet, LinkForm, UploadBox, UploadInstructions, useInvalidateLists } from '../components/AddList';
@@ -427,7 +427,102 @@ function JellyfinPage() {
       )}
       {isAdmin && services.jellyfin && <JobStatus job="jellyfin" label="Library Sync" />}
       {isAdmin && services.jellyfin && <WebhookSection target="jellyfin" />}
+      {isAdmin && services.jellyfin && <PluginSection />}
     </>
+  );
+}
+
+/** Optional plugin that shows a Watchlists page inside Jellyfin. */
+function PluginSection() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const q = useQuery({ queryKey: ['jellyfin-plugin'], queryFn: () => get<JellyfinPluginView>('/integrations/jellyfin-plugin') });
+  const [busy, setBusy] = useState(false);
+  const [confirmOff, setConfirmOff] = useState(false);
+  if (!q.data) return null;
+  const p = q.data;
+  const run = async (fn: () => Promise<JellyfinPluginView>, message: string) => {
+    setBusy(true);
+    try {
+      qc.setQueryData(['jellyfin-plugin'], await fn());
+      toast('success', message);
+    } catch (err) {
+      toast('error', errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const otherServer = p.lastSeen?.jellyfinServerId && p.jellyfinServerId && p.lastSeen.jellyfinServerId !== p.jellyfinServerId;
+  return (
+    <Section
+      title="Jellyfin Plugin (Optional)"
+      footer={
+        p.enabled ? (
+          <>
+            In Jellyfin open Dashboard › Plugins › Repositories and add both repositories above. Install “File Transformation” and “JellyWatcher” from the catalog and restart Jellyfin. In the JellyWatcher plugin settings enter the address Jellyfin uses to reach JellyWatcher (for example http://jellywatcher:8484) and the plugin key. People then find “Watchlists” in Jellyfin’s menu.
+          </>
+        ) : (
+          <>Adds a Watchlists page to Jellyfin’s menu with your lists, their timelines, and Request, Not Watching and Watched buttons. People use it with their Jellyfin account; it follows the same rules as signing in with Jellyfin.</>
+        )
+      }
+    >
+      {!p.enabled ? (
+        <div className="row">
+          <div className="row-main">
+            <div className="row-title">Off</div>
+            <div className="row-sub">Turning it on creates a key that the plugin uses to talk to JellyWatcher.</div>
+          </div>
+          <button className="btn btn-small btn-primary" disabled={busy} onClick={() => run(() => post<JellyfinPluginView>('/integrations/jellyfin-plugin'), 'Plugin key created.')}>
+            {busy && <Spinner />}
+            Turn On
+          </button>
+        </div>
+      ) : (
+        <>
+          <CopyField label="JellyWatcher plugin repository" value={p.repositoryUrl} />
+          <CopyField label="File Transformation repository (required)" value={p.fileTransformationRepositoryUrl} />
+          <CopyField label="Plugin key" value={p.key ?? ''} />
+          <div className="row">
+            <div className="row-main">
+              <div className="row-title">{p.lastSeen ? 'Connected' : 'Waiting for the plugin'}</div>
+              <div className="row-sub">
+                {p.lastSeen ? (
+                  <>
+                    {p.lastSeen.version ? `Plugin ${p.lastSeen.version} · ` : ''}last request <Time iso={p.lastSeen.at} />
+                  </>
+                ) : (
+                  'The plugin has not called in since JellyWatcher started.'
+                )}
+              </div>
+              {otherServer && <div className="row-sub" style={{ color: 'var(--orange)' }}>The plugin runs on a different Jellyfin server than the one connected above, so accounts may not match.</div>}
+            </div>
+          </div>
+          <div className="row">
+            <div className="row-main row-sub">The key lets the plugin act for any linked person, so treat it like a password. A new key stops the old one at once.</div>
+            <div className="inline" style={{ gap: 8 }}>
+              <button className="btn btn-small btn-gray" disabled={busy} onClick={() => run(() => post<JellyfinPluginView>('/integrations/jellyfin-plugin'), 'New plugin key created. Paste it into the plugin settings.')}>
+                Regenerate
+              </button>
+              <button className="btn btn-small btn-gray" disabled={busy} onClick={() => setConfirmOff(true)}>
+                Turn Off
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+      <ConfirmSheet
+        open={confirmOff}
+        title="Turn off the Jellyfin plugin?"
+        message="The Watchlists page in Jellyfin stops working until you turn it on again and paste the new key into the plugin."
+        confirmLabel="Turn Off"
+        destructive
+        onClose={() => setConfirmOff(false)}
+        onConfirm={() => {
+          setConfirmOff(false);
+          void run(() => del<JellyfinPluginView>('/integrations/jellyfin-plugin'), 'Jellyfin plugin turned off.');
+        }}
+      />
+    </Section>
   );
 }
 

@@ -48,6 +48,8 @@ export interface TimelineEntry {
   watchedAt: string | null;
   /** The person marked it "Not Watching" (and has not watched it): Up Next passes over it. */
   skipped: boolean;
+  /** The Jellyfin item to open for this entry (the episode for episode entries), when in the library. */
+  jellyfinItemId: string | null;
 }
 
 export interface TimelineSummary {
@@ -149,13 +151,16 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
     watched.set(id, set);
   }
   const present = new Map<number, Map<string, number | null>>();
+  const episodeIds = new Map<number, Map<string, string>>();
   for (const r of inChunks(tvIds, (c, ph) =>
     ctx.db
-      .prepare(`SELECT ji.title_id, je.season, je.episode, je.runtime_ticks FROM jellyfin_episodes je JOIN jellyfin_items ji ON ji.id = je.series_id WHERE ji.title_id IN (${ph})`)
-      .all(...c) as { title_id: number; season: number; episode: number; runtime_ticks: number | null }[],
+      .prepare(`SELECT ji.title_id, je.id, je.season, je.episode, je.runtime_ticks FROM jellyfin_episodes je JOIN jellyfin_items ji ON ji.id = je.series_id WHERE ji.title_id IN (${ph})`)
+      .all(...c) as { title_id: number; id: string; season: number; episode: number; runtime_ticks: number | null }[],
   )) {
     if (!present.has(r.title_id)) present.set(r.title_id, new Map());
     present.get(r.title_id)!.set(key(r.season, r.episode), toMinutes(r.runtime_ticks));
+    if (!episodeIds.has(r.title_id)) episodeIds.set(r.title_id, new Map());
+    episodeIds.get(r.title_id)!.set(key(r.season, r.episode), r.id);
   }
 
   const byList = new Map<number, ItemRow[]>();
@@ -172,6 +177,7 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
         present: i.title_id !== null ? present.get(i.title_id) : undefined,
         marks: i.title_id !== null ? marks.get(i.title_id) : undefined,
         skips: i.title_id !== null ? skips.get(i.title_id) : undefined,
+        episodeIds: i.title_id !== null ? episodeIds.get(i.title_id) : undefined,
       }),
     );
     out.set(listId, { entries, summary: summarize(entries), nextIndex: nextIndex(entries) });
@@ -191,16 +197,23 @@ interface EntryContext {
   marks: ManualMarks | undefined;
   /** What of this title the person is not watching. */
   skips: SkipMarks | undefined;
+  /** Jellyfin ids of the title's episodes in the library (season:episode → item id). */
+  episodeIds: Map<string, string> | undefined;
 }
 
 function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry {
   const e = baseEntryFor(i, position, c);
   // Watched wins over "Not Watching".
   const skipped = e.matched && e.state !== 'watched' && skipCovers(c.skips, i.season_number, i.season_number !== null ? i.episode_number : null);
-  return { ...e, skipped };
+  let jellyfinItemId: string | null = null;
+  if (e.matched && e.availability !== 'not_in_library') {
+    const episodeId = e.kind === 'episode' ? c.episodeIds?.get(key(i.season_number!, i.episode_number!)) : undefined;
+    jellyfinItemId = episodeId ?? c.status?.jellyfinItemId ?? null;
+  }
+  return { ...e, skipped, jellyfinItemId };
 }
 
-function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<TimelineEntry, 'skipped'> {
+function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<TimelineEntry, 'skipped' | 'jellyfinItemId'> {
   const matched = i.match_status === 'matched' && Boolean(c.row);
   const mediaType = c.row?.media_type ?? i.media_type;
   const kind: EntryKind = i.season_number !== null ? (i.episode_number !== null ? 'episode' : 'season') : mediaType === 'tv' ? 'show' : 'movie';

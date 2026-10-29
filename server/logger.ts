@@ -9,6 +9,7 @@ export const REDACT_PATHS = [
   'req.headers.cookie',
   'req.headers["x-api-key"]',
   'req.headers["x-csrf-token"]',
+  'req.headers["x-jw-plugin-key"]',
   'res.headers["set-cookie"]',
   '*.password',
   '*.apiKey',
@@ -24,6 +25,8 @@ const SECRET_PATTERNS: RegExp[] = [
   /(Token=")[^"]*(?=")/gi,
   /(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi,
   /(X-Api-Key:\s*)\S+/gi,
+  /(X-JW-Plugin-Key:\s*)\S+/gi,
+  /(\b)jwp_[A-Za-z0-9_-]{8,}/g,
   /([?&](?:api_?key|apikey|token|access_token|refresh_token|code|secret|client_secret)=)[^&\s]+/gi,
 ];
 

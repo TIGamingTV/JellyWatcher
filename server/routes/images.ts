@@ -62,7 +62,8 @@ export async function imageRoutes(app: FastifyInstance, { ctx }: AppDeps) {
   }
 
   app.get('/images/tmdb/:size/:file', async (req, reply) => {
-    requireUser(req);
+    // TMDb artwork is public; the Jellyfin plugin fetches it with its key alone (for <img> tags).
+    if (!req.viaPlugin) requireUser(req);
     const p = parse(z.object({ size: z.enum(TMDB_SIZES), file: z.string().regex(/^[A-Za-z0-9_-]{1,100}\.(jpg|jpeg|png|webp)$/i) }), req.params);
     const key = crypto.createHash('sha1').update(`tmdb:${p.size}:${p.file}`).digest('hex');
     return serve(reply, key, async () => {

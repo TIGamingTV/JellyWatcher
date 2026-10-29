@@ -134,5 +134,6 @@ presenting old data as current.
   - Only to admin-configured service URLs (http/https, no embedded credentials) and fixed provider hosts.
   - The image proxy accepts only whitelisted sizes and file names, or Jellyfin item ids, so it is not an open proxy.
 - **Webhooks:** authenticated with a bearer token. The payload is never trusted; it only schedules a sync.
+- **Jellyfin plugin:** off until an administrator creates a plugin key. Requests with the key (`X-JW-Plugin-Key`, compared in constant time) act for the Jellyfin user named in `X-JW-Jellyfin-User`, resolved with the same rules as Jellyfin sign-in, and can only reach an allowlist of list, timeline, request, skip and watched routes; no cookie is involved, so they skip the CSRF check. See [jellyfin-plugin.md](jellyfin-plugin.md).
 - **HTTP headers:** strict CSP (`default-src 'self'`), `frame-ancestors 'none'`, `nosniff`, `no-referrer`.
 - **Container:** non-root (uid 1000), read-only root filesystem, all capabilities dropped, `no-new-privileges`.

@@ -1,30 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { AlertTriangle, Check, Circle, GripVertical, SkipForward, Trash2, Undo2 } from 'lucide-react';
+import { AlertTriangle, Check, Circle, GripVertical, Plus, SkipForward, Trash2, Undo2 } from 'lucide-react';
+import { entryRequestable } from '../../../shared/status';
 import type { Timeline, TimelineEntry, TimelineSummary } from '../lib/types';
-import { date, duration, episodeCode, plural, seasonName } from '../lib/format';
+import { useUser } from '../lib/session';
+import { date, duration, plural } from '../lib/format';
+import { entryFacts, entryHeading, scopeOf } from '../lib/timeline';
+
+export { entryFacts, entryHeading, scopeOf };
 import { PosterImage } from './Poster';
 import { StagePill } from './status';
 import { QuickWatchSheet, useSkipToggle } from './Watched';
-
-/** Display name of an entry: the show for seasons/episodes, plus what part of it. */
-export function entryHeading(e: TimelineEntry): { title: string; part: string | null } {
-  const title = e.title?.title ?? e.sourceTitle;
-  if (e.kind === 'episode') return { title, part: [episodeCode(e.season, e.episode), e.episodeTitle].filter(Boolean).join(' · ') };
-  // Season entries can carry the source's own name for the season (anime seasons and cours).
-  if (e.kind === 'season') return { title, part: [episodeCode(e.season, null), seasonName(e.episodeTitle, title, e.season)].filter(Boolean).join(' · ') };
-  return { title, part: null };
-}
-
-export function entryFacts(e: TimelineEntry): string[] {
-  const facts: (string | null)[] = [];
-  if (e.kind === 'movie') facts.push('Movie', e.year ? String(e.year) : null);
-  else if (e.kind === 'show') facts.push('Show', e.seasons ? plural(e.seasons, 'season') : null, e.episodes ? plural(e.episodes, 'episode') : null);
-  else if (e.kind === 'season') facts.push(e.episodes ? plural(e.episodes, 'episode') : 'Season');
-  else facts.push('Episode');
-  facts.push(e.runtime ? duration(e.runtime) : null);
-  return facts.filter((f): f is string => Boolean(f));
-}
+import { RequestSheet } from './RequestSheet';
 
 export function TimelineSummaryPanel({ summary, compact }: { summary: TimelineSummary; compact?: boolean }) {
   const pct = summary.totalMinutes > 0 ? Math.round((summary.watchedMinutes / summary.totalMinutes) * 100) : 0;
@@ -77,6 +64,8 @@ interface RowProps {
   editing: boolean;
   removable: boolean;
   total: number;
+  canRequest: boolean;
+  onRequest: (e: TimelineEntry) => void;
   onWatch: (e: TimelineEntry) => void;
   onSkip: (e: TimelineEntry) => void;
   onRemove: (e: TimelineEntry) => void;
@@ -84,7 +73,7 @@ interface RowProps {
   onHandleKey: (ev: React.KeyboardEvent<HTMLButtonElement>) => void;
 }
 
-function EntryRow({ e, next, editing, removable, total, onWatch, onSkip, onRemove, onHandleDown, onHandleKey }: RowProps) {
+function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, onWatch, onSkip, onRemove, onHandleDown, onHandleKey }: RowProps) {
   const { title, part } = entryHeading(e);
   const facts = entryFacts(e);
   const progressLabel =
@@ -139,7 +128,17 @@ function EntryRow({ e, next, editing, removable, total, onWatch, onSkip, onRemov
         ) : (
           <>
             {e.matched ? (
-              e.state !== 'watched' && !e.skipped && (e.stage === 'listed' ? <span className="pill">Not Requested</span> : <StagePill stage={e.stage} />)
+              e.state !== 'watched' &&
+              !e.skipped && (
+                <div className="tl-status">
+                  {e.stage === 'listed' ? !canRequest && <span className="pill">Not Requested</span> : <StagePill stage={e.stage} />}
+                  {canRequest && (
+                    <button className="btn btn-small tl-request" onClick={() => onRequest(e)} aria-haspopup="dialog" aria-label={`Request ${name}`}>
+                      <Plus size={14} aria-hidden /> {e.stage === 'declined' || e.stage === 'failed' ? 'Request Again' : 'Request'}
+                    </button>
+                  )}
+                </div>
+              )
             ) : (
               <Link to="/watchlists/review" className="pill pill-orange">
                 <AlertTriangle size={12} aria-hidden /> Needs Match
@@ -187,11 +186,6 @@ function EntryRow({ e, next, editing, removable, total, onWatch, onSkip, onRemov
   );
 }
 
-/** The part of the title an entry stands for. */
-export function scopeOf(e: Pick<TimelineEntry, 'kind' | 'season' | 'episode'>): { season?: number | null; episode?: number | null } {
-  return e.kind === 'season' ? { season: e.season } : e.kind === 'episode' ? { season: e.season, episode: e.episode } : {};
-}
-
 function renumber(entries: TimelineEntry[]): TimelineEntry[] {
   return entries.map((e, i) => (e.position === i + 1 ? e : { ...e, position: i + 1 }));
 }
@@ -233,6 +227,8 @@ export function TimelineView({
 }) {
   const [entries, setEntries] = useState(timeline.entries);
   const [watching, setWatching] = useState<TimelineEntry | null>(null);
+  const [requesting, setRequesting] = useState<TimelineEntry | null>(null);
+  const { services } = useUser();
   const [announce, setAnnounce] = useState('');
   const listRef = useRef<HTMLOListElement>(null);
   const drag = useRef<DragState | null>(null);
@@ -360,6 +356,7 @@ export function TimelineView({
   };
 
   const w = watching;
+  const r = requesting;
   return (
     <>
       <ol ref={listRef} className={`timeline${editing ? ' reordering' : ''}`} aria-label="Watch order">
@@ -371,6 +368,8 @@ export function TimelineView({
             editing={editing}
             removable={removable}
             total={entries.length}
+            canRequest={services.seerr && entryRequestable(e)}
+            onRequest={setRequesting}
             onWatch={setWatching}
             onSkip={onSkip}
             onRemove={(x) => onRemove?.(x)}
@@ -390,6 +389,15 @@ export function TimelineView({
           manualAt={w.manualAt}
           watched={w.state === 'watched'}
           onClose={() => setWatching(null)}
+        />
+      )}
+      {r && r.title && (
+        <RequestSheet
+          titleId={r.title.id}
+          title={[entryHeading(r).title, entryHeading(r).part].filter(Boolean).join(' · ')}
+          mediaType={r.title.mediaType}
+          preset={r.season !== null && r.season > 0 ? [r.season] : null}
+          onClose={() => setRequesting(null)}
         />
       )}
     </>
