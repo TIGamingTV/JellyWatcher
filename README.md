@@ -31,7 +31,7 @@ Save this as `compose.yaml` in an empty folder, create a `data` folder next to i
 ```yaml
 services:
   jellywatcher:
-    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.4.0
+    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.4.1
     container_name: jellywatcher
     restart: unless-stopped
     init: true
@@ -175,8 +175,8 @@ npm test         # unit and end-to-end tests against mocked services
 npm run build
 ```
 
-Releases: set `version` in `package.json` and push a matching tag (`git tag v0.4.0 && git push origin
-v0.4.0`). The [release workflow](.github/workflows/release.yml) tests, publishes the multi-arch image
+Releases: set `version` in `package.json` and push a matching tag (`git tag v0.4.1 && git push origin
+v0.4.1`). The [release workflow](.github/workflows/release.yml) tests, publishes the multi-arch image
 to GHCR and creates the GitHub release.
 
 ## Attribution
