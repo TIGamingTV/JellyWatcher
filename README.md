@@ -31,43 +31,13 @@ Save this as `compose.yaml` in an empty folder, create a `data` folder next to i
 ```yaml
 services:
   jellywatcher:
-    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.4.0
+    image: ghcr.io/tigamingtv/jellywatcher:latest
     container_name: jellywatcher
     restart: unless-stopped
-    init: true
     ports:
-      - "${JW_HOST_PORT:-8484}:8484"   # host port: 8484, or JW_HOST_PORT from .env
-    environment:
-      TZ: ${TZ:-UTC}                # time zone, e.g. Europe/Berlin (or TZ in .env)
-      # Only behind a reverse proxy (see docs/operations.md):
-      # JW_PUBLIC_URL: https://watch.example.com
-      # JW_TRUST_PROXY: "true"
-    env_file:                       # optional extra settings, see .env.example
-      - path: .env
-        required: false
+      - "8484:8484"
     volumes:
-      - ./data:/data                # database, encryption key, cache, logs, backups
-    # Hardening: the app only writes to /data.
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    # Jellyfin and Seerr in Compose on the same host? Join their network and use container
-    # names (e.g. http://jellyfin:8096) as server URLs in Integrations:
-    # networks:
-    #   - media
-
-# networks:
-#   media:
-#     external: true
+      - ./data:/data
 ```
 
 The setup code is printed to the log: `docker compose logs jellywatcher | grep "setup code"`.
