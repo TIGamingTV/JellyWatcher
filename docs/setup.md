@@ -114,7 +114,7 @@ JellyWatcher recognises the service. Lists added by link keep their order and sy
 | --- | --- | --- |
 | **Trakt** | Public lists and watchlists (`trakt.tv/users/…/lists/…`, `…/watchlist`). Needs the Trakt app from Integrations › Trakt (Client ID). Connect your account there for your own watchlist, lists and liked lists. | — |
 | **Letterboxd** | Public lists and watchlists (`letterboxd.com/name/list/…`, `letterboxd.com/name/watchlist/`, `boxd.it/…`). Your own watchlist link replaces an uploaded one. | The export ZIP (letterboxd.com › Settings › Data › Export Your Data) or a single list CSV. Optionally add your username for the RSS diary. |
-| **IMDb** | Public lists (`imdb.com/list/ls…`, any language prefix), with episodes. | The CSV from the Export icon of your Watchlist or a private list (episodes skipped). |
+| **IMDb** | Public lists (`imdb.com/list/ls…`, any language prefix), with episodes. | The CSV from the Export icon of your Watchlist or a private list, with episodes. |
 | **TMDb** | Public lists (`themoviedb.org/list/…`). Needs the TMDb token in Integrations › TMDb. | A CSV with a TMDb ID column (and ideally a type column). |
 | **MyAnimeList** | Public anime lists (`myanimelist.net/animelist/name?status=6`; the status picks the list, Plan to Watch by default). | The anime list export (`.xml.gz`, Profile › Export Lists). |
 | **AniList** | Anime lists (`anilist.co/user/name/animelist/Planning`, or any list name; Planning by default). | A MyAnimeList-format XML. |
@@ -133,6 +133,12 @@ Anime from MyAnimeList, AniList and Simkl are matched to TMDb with the community
 Every list opens as a **timeline**: each entry in list order, including single seasons and episodes,
 with film, show, season and episode counts and the watch time left. Switch any list to a poster grid
 with *Grid*.
+
+Lists may mix movies with single episodes of several shows (watch-order lists such as a whole
+franchise in story order). When a show is listed **before its own seasons or episodes**, it is shown
+as a section title for them: it adds no watch time of its own, Up Next goes straight to its first
+episode, and Jellyfin collections and playlists contain the episodes in their places. A show listed
+without parts after it still stands for the whole show.
 
 - **Reorder** lets you drag entries (or move them with the arrow keys). Your order is kept across
   syncs; *Use … Order* goes back to the source's order.

@@ -102,6 +102,9 @@ a.jw-btn { color: var(--jw-text); }
 .jw-tl-item.in_progress .jw-tl-node { border-color: var(--jw-accent); color: var(--jw-accent); }
 .jw-tl-item.next .jw-tl-node { border-color: var(--jw-accent); color: var(--jw-accent); box-shadow: 0 0 0 4px var(--jw-tint); }
 .jw-tl-item.skipped .jw-tl-node { border-style: dashed; }
+.jw-tl-item.header { padding-top: 1.2em; }
+.jw-tl-item.header .jw-tl-node { border-radius: 0.5em; color: var(--jw-text); box-shadow: none; }
+.jw-tl-item.header .jw-tl-title { font-size: 1.15em; font-weight: 700; }
 .jw-thumb { width: 3.4em; aspect-ratio: 2 / 3; border-radius: 4px; overflow: hidden; background: var(--jw-paper); display: grid; place-items: center; }
 .jw-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .jw-thumb-fallback { font-size: 0.6em; padding: 0.3em; text-align: center; color: var(--jw-text-2); overflow: hidden; }

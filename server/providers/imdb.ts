@@ -13,7 +13,9 @@ import type { ListFetchResult, SourceItem } from './types.js';
  *   episodes with their show. IMDb permits only limited, non-commercial use of this data.
  *   Verified 2026-10: POST https://api.graphql.imdb.com/, requires an `x-imdb-client-name` header.
  * - Private lists and watchlists are imported from the CSV that IMDb's "Export" action produces.
- *   Column names are matched case-insensitively with aliases because the format has changed.
+ *   Column names are matched case-insensitively with aliases because the format has changed. The
+ *   CSV lists episodes by their own id only; their show and numbers are looked up through the same
+ *   GraphQL endpoint (`titles(ids:)`, verified 2026-10) before the list is saved.
  */
 
 export const IMDB_GRAPHQL = 'https://api.graphql.imdb.com';
@@ -98,6 +100,23 @@ const GqlResponse = z.object({
 
 const minutes = (seconds: number | null | undefined) => (seconds && seconds > 0 ? Math.round(seconds / 60) : null);
 
+/** An episode as part of its show (the show's id and name, plus the episode's numbers); null when it has no show or numbers. */
+function episodeOfShow(t: z.infer<typeof GqlTitle>): Pick<SourceItem, 'title' | 'year' | 'mediaType' | 'imdbId' | 'seasonNumber' | 'episodeNumber' | 'episodeTitle' | 'runtime'> | null {
+  const show = t.series?.series;
+  const ep = t.series?.episodeNumber;
+  if (!show || ep?.seasonNumber == null || ep.episodeNumber == null) return null; // games, podcasts, unknown seasons
+  return {
+    title: show.titleText?.text || show.id,
+    year: show.releaseYear?.year ?? null,
+    mediaType: 'tv',
+    imdbId: show.id,
+    seasonNumber: ep.seasonNumber,
+    episodeNumber: ep.episodeNumber,
+    episodeTitle: t.titleText?.text ?? null,
+    runtime: minutes(t.runtime?.seconds),
+  };
+}
+
 /** Converts one GraphQL list entry to a source item; returns null for types that cannot be shown. */
 export function imdbGqlItem(node: z.infer<typeof GqlList>['items']['edges'][number]['node'], position: number): SourceItem | null {
   const t = node.listItem;
@@ -106,21 +125,8 @@ export function imdbGqlItem(node: z.infer<typeof GqlList>['items']['edges'][numb
   const notes = node.description?.originalText?.plainText?.slice(0, 2000) || null;
   const base = { position, listedAt: node.createdDate ?? null, notes, sourceUrl: `https://www.imdb.com/title/${t.id}/` };
   if (type === 'skip') {
-    const show = t.series?.series;
-    const ep = t.series?.episodeNumber;
-    if (!show || ep?.seasonNumber == null || ep.episodeNumber == null) return null; // games, podcasts
-    return {
-      ...base,
-      sourceKey: t.id,
-      title: show.titleText?.text || show.id,
-      year: show.releaseYear?.year ?? null,
-      mediaType: 'tv',
-      imdbId: show.id,
-      seasonNumber: ep.seasonNumber,
-      episodeNumber: ep.episodeNumber,
-      episodeTitle: t.titleText?.text ?? null,
-      runtime: minutes(t.runtime?.seconds),
-    };
+    const ep = episodeOfShow(t);
+    return ep ? { ...base, sourceKey: t.id, ...ep } : null;
   }
   return {
     ...base,
@@ -186,6 +192,60 @@ export class ImdbClient {
       skipped,
     };
   }
+
+  /** Looks titles up by id (100 per call). Unknown ids are left out of the result. */
+  async titles(ids: string[]): Promise<Map<string, z.infer<typeof GqlTitle>>> {
+    const out = new Map<string, z.infer<typeof GqlTitle>>();
+    const wanted = [...new Set(ids.filter((id) => IMDB_TITLE_ID.test(id)))];
+    for (let i = 0; i < wanted.length; i += 100) {
+      const res = await this.http.post<unknown>('/', { query: TITLES_QUERY, variables: { ids: wanted.slice(i, i + 100) } }, { retries: 2 });
+      const parsed = GqlTitlesResponse.safeParse(res.data);
+      if (!parsed.success) throw new ProviderError('imdb', 'invalid_response');
+      for (const t of parsed.data.data?.titles ?? []) if (t?.id) out.set(t.id, t);
+    }
+    return out;
+  }
+}
+
+const IMDB_TITLE_ID = /^tt\d{5,10}$/;
+const TITLES_QUERY = `query JellyWatcherTitles($ids: [ID!]!) {
+  titles(ids: $ids) {
+    id
+    titleText { text }
+    titleType { id }
+    runtime { seconds }
+    series { series { id titleText { text } releaseYear { year } } episodeNumber { seasonNumber episodeNumber } }
+  }
+}`;
+const GqlTitlesResponse = z.object({ data: z.object({ titles: z.array(GqlTitle.nullable()).nullish() }).nullish() });
+
+/**
+ * Turns episodes that are only known by their own IMDb id (CSV exports) into entries of their show,
+ * like the list link does. Episodes IMDb cannot place (no show or no numbers) are dropped and
+ * counted as skipped rather than matched by their episode title, which would find unrelated movies.
+ * Throws a ProviderError when IMDb cannot be reached, so nothing is saved half-resolved.
+ */
+export async function resolveEpisodeItems(result: ListFetchResult, client: Pick<ImdbClient, 'titles'>): Promise<ListFetchResult> {
+  const pending = result.items.filter((i) => i.episodeImdbId);
+  if (pending.length === 0) return result;
+  const found = await client.titles(pending.map((i) => i.episodeImdbId!));
+  const items: SourceItem[] = [];
+  let skipped = result.skipped;
+  for (const item of result.items) {
+    if (!item.episodeImdbId) {
+      items.push(item);
+      continue;
+    }
+    const t = found.get(item.episodeImdbId);
+    const ep = t ? episodeOfShow(t) : null;
+    if (!ep) {
+      skipped++;
+      continue;
+    }
+    const { episodeImdbId: _, ...rest } = item;
+    items.push({ ...rest, ...ep, runtime: rest.runtime ?? ep.runtime, sourceUrl: rest.sourceUrl ?? `https://www.imdb.com/title/${item.episodeImdbId}/` });
+  }
+  return { ...result, items, skipped };
 }
 
 const IMDB_ID = /\b(tt\d{5,10})\b/;
@@ -198,6 +258,12 @@ export function mapImdbTitleType(raw: string | undefined): MediaType | 'skip' | 
   if (['tvseries', 'tvminiseries', 'series', 'miniseries', 'tv'].includes(t)) return 'tv';
   if (['tvepisode', 'episode', 'videogame', 'game', 'podcastseries', 'podcastepisode', 'podcast'].includes(t)) return 'skip';
   return null;
+}
+
+/** True for IMDb "Title Type" values of TV episodes. */
+export function isImdbEpisodeType(raw: string | undefined): boolean {
+  const t = (raw ?? '').toLowerCase().replace(/[\s_-]+/g, '');
+  return t === 'tvepisode' || t === 'episode';
 }
 
 export function parseImdbCsv(text: string, fallbackName: string): ListFetchResult {
@@ -226,8 +292,10 @@ export function parseImdbCsv(text: string, fallbackName: string): ListFetchResul
     const idRaw = (iConst >= 0 ? row[iConst] : '') || (iUrl >= 0 ? row[iUrl] : '') || '';
     const imdbId = idRaw.match(IMDB_ID)?.[1] ?? null;
     const title = (iTitle >= 0 ? row[iTitle] : '') || (iOrig >= 0 ? row[iOrig] : '') || '';
-    const type = mapImdbTitleType(iType >= 0 ? row[iType] : undefined);
-    if (type === 'skip' || (!imdbId && !title)) {
+    const rawType = iType >= 0 ? row[iType] : undefined;
+    const type = mapImdbTitleType(rawType);
+    const episode = isImdbEpisodeType(rawType) && imdbId !== null;
+    if ((type === 'skip' && !episode) || (!imdbId && !title)) {
       skipped++;
       continue;
     }
@@ -235,7 +303,7 @@ export function parseImdbCsv(text: string, fallbackName: string): ListFetchResul
       sourceKey: imdbId ?? `${title.toLowerCase()}|${row[iYear] ?? ''}`,
       title: title || imdbId!,
       year: iYear >= 0 ? toInt(row[iYear]) : null,
-      mediaType: type,
+      mediaType: episode ? 'tv' : (type as MediaType | null),
       imdbId,
       sourceUrl: imdbId ? `https://www.imdb.com/title/${imdbId}/` : null,
       position: iPos >= 0 ? toInt(row[iPos]) : r,
@@ -243,6 +311,8 @@ export function parseImdbCsv(text: string, fallbackName: string): ListFetchResul
       rating: iRated >= 0 ? toFloat(row[iRated]) : null,
       notes: iDesc >= 0 ? row[iDesc] || null : null,
       runtime: iRuntime >= 0 ? toInt(row[iRuntime]) : null,
+      // The show and episode numbers are looked up by resolveEpisodeItems.
+      episodeImdbId: episode ? imdbId : null,
     });
   }
   if (items.length === 0 && skipped === 0) throw new UploadError('The file contains no titles.');

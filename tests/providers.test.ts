@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 import { parseEntries, parseTraktListUrl, tokensFromResponse } from '../server/providers/trakt';
 import { parseLetterboxdCsv, parseLetterboxdRss, parseLetterboxdZip, UploadError } from '../server/providers/letterboxd';
-import { ImdbClient, imdbGqlItem, mapImdbTitleType, parseImdbCsv, parseImdbListUrl } from '../server/providers/imdb';
+import { ImdbClient, imdbGqlItem, mapImdbTitleType, parseImdbCsv, parseImdbListUrl, resolveEpisodeItems } from '../server/providers/imdb';
 import { isTimeline } from '../server/services/lists';
 import { mediaBrowserHeader, normalizeItem, normalizeUserData } from '../server/providers/jellyfin';
 import { encodeSeerrQuery, seerrCan } from '../server/providers/seerr';
@@ -126,18 +126,49 @@ describe('IMDb', () => {
     expect(mapImdbTitleType('Something New')).toBeNull();
   });
 
-  it('parses an export, using Const and skipping episodes', () => {
+  it('parses an export, using Const and keeping episodes for lookup', () => {
     const csv = `Position,Const,Created,Modified,Description,Title,Original Title,URL,Title Type,IMDb Rating,Runtime (mins),Year,Genres,Num Votes,Release Date,Directors,Your Rating,Date Rated
 1,tt0113277,2024-01-01,2024-01-01,,Heat,Heat,https://www.imdb.com/title/tt0113277/,Movie,8.3,170,1995,"Action, Crime",700000,1995-12-15,Michael Mann,,
 2,tt11280740,2024-01-02,2024-01-02,,Severance,Severance,https://www.imdb.com/title/tt11280740/,TV Series,8.7,55,2022,Drama,300000,2022-02-18,,9,2024-02-01
-3,tt0000001,2024-01-03,2024-01-03,,Some Episode,,https://www.imdb.com/title/tt0000001/,TV Episode,7,30,2020,,,,,,`;
+3,tt0959621,2024-01-03,2024-01-03,,Pilot,,https://www.imdb.com/title/tt0959621/,TV Episode,9,58,2008,,,,,,
+4,tt0000001,2024-01-04,2024-01-04,,A Game,,https://www.imdb.com/title/tt0000001/,Video Game,7,0,2020,,,,,,`;
     const r = parseImdbCsv(csv, 'WATCHLIST');
-    expect(r.items.map((i) => [i.imdbId, i.mediaType])).toEqual([
-      ['tt0113277', 'movie'],
-      ['tt11280740', 'tv'],
+    expect(r.items.map((i) => [i.imdbId, i.mediaType, i.episodeImdbId])).toEqual([
+      ['tt0113277', 'movie', null],
+      ['tt11280740', 'tv', null],
+      ['tt0959621', 'tv', 'tt0959621'],
     ]);
     expect(r.skipped).toBe(1);
     expect(r.items[1]!.rating).toBe(9);
+  });
+
+  it('places exported episodes in their show through IMDb, and drops those it cannot place', async () => {
+    const parsed = parseImdbCsv('Const,Title,Title Type,Runtime (mins)\ntt0113277,Heat,Movie,170\ntt0959621,Pilot,TV Episode,58\ntt9999999,Lost,TV Episode,\n', 'x');
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init!.body));
+      expect(body.query).toContain('titles(ids: $ids)');
+      expect(body.variables.ids).toEqual(['tt0959621', 'tt9999999']);
+      return new Response(
+        JSON.stringify({
+          data: {
+            titles: [
+              { id: 'tt0959621', titleText: { text: 'Pilot' }, titleType: { id: 'tvEpisode' }, runtime: { seconds: 3480 }, series: { series: { id: 'tt0903747', titleText: { text: 'Breaking Bad' }, releaseYear: { year: 2008 } }, episodeNumber: { seasonNumber: 1, episodeNumber: 1 } } },
+              { id: 'tt9999999', titleText: { text: 'Lost' }, titleType: { id: 'tvEpisode' }, series: null },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const r = await resolveEpisodeItems(parsed, new ImdbClient(fetchImpl));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(r.items).toHaveLength(2);
+    expect(r.items[1]).toMatchObject({ sourceKey: 'tt0959621', title: 'Breaking Bad', imdbId: 'tt0903747', mediaType: 'tv', seasonNumber: 1, episodeNumber: 1, episodeTitle: 'Pilot', runtime: 58, sourceUrl: 'https://www.imdb.com/title/tt0959621/' });
+    expect(r.items[1]!.episodeImdbId).toBeUndefined();
+    expect(r.skipped).toBe(1);
+    // Nothing to look up: no request.
+    const plain = parseImdbCsv('Const,Title,Title Type\ntt0113277,Heat,Movie\n', 'x');
+    expect(await resolveEpisodeItems(plain, { titles: () => Promise.reject(new Error('no call expected')) })).toBe(plain);
   });
 
   it('recognises public list links in any locale, and nothing else', () => {

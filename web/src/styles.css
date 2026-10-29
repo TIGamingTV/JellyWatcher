@@ -558,6 +558,10 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
 .tl-actions { display: flex; align-items: center; gap: 2px; }
 .tl-skip.on { color: var(--label-2); background: var(--surface-2); }
 .tl-skip:hover { color: var(--label); background: var(--surface-hover); }
+.tl-item.header { padding-top: 18px; }
+.tl-item.header .tl-node { border-radius: 8px; background: var(--surface-2); color: var(--label); border-color: var(--separator-strong); box-shadow: none; }
+.tl-item.header .tl-title { font-family: var(--font-display); font-size: 1.125rem; font-weight: 700; }
+.tl-item.header.watched .tl-node { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
 .tl-item.skipped .tl-thumb, .tl-item.skipped .tl-title, .tl-item.skipped .tl-sub { opacity: 0.55; }
 .tl-item.skipped .tl-title { text-decoration: line-through; text-decoration-color: var(--label-3); }
 .tl-item.skipped .tl-node { border-style: dashed; color: var(--label-3); }

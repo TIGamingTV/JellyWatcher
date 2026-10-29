@@ -50,10 +50,21 @@ export interface TimelineEntry {
   skipped: boolean;
   /** The Jellyfin item to open for this entry (the episode for episode entries), when in the library. */
   jellyfinItemId: string | null;
+  /**
+   * A whole-show entry that heads parts of the same show listed after it (e.g. an IMDb list with
+   * "Breaking Bad" followed by its episodes). It stands for those parts rather than the whole show:
+   * no size or watch time of its own, never Up Next, and not mirrored to Jellyfin.
+   */
+  header: boolean;
+  /** For headers: how many entries of the show follow it in the list; null otherwise. */
+  parts: number | null;
 }
 
 export interface TimelineSummary {
+  /** Entries to watch (headers are not counted). */
   entries: number;
+  /** Show entries that only head their parts listed below them. */
+  headers: number;
   films: number;
   shows: number;
   seasons: number;
@@ -167,8 +178,9 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
   for (const i of items) byList.set(i.list_id, [...(byList.get(i.list_id) ?? []), i]);
 
   for (const listId of listIds) {
-    const entries = (byList.get(listId) ?? []).map((i, idx) =>
-      entryFor(i, idx + 1, {
+    const entries = markHeaders(
+      (byList.get(listId) ?? []).map((i, idx) =>
+        entryFor(i, idx + 1, {
         row: i.title_id !== null ? rows.get(i.title_id) : undefined,
         card: i.title_id !== null ? cards.get(i.title_id) : undefined,
         status: i.title_id !== null ? statuses.get(i.title_id) : undefined,
@@ -178,7 +190,8 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
         marks: i.title_id !== null ? marks.get(i.title_id) : undefined,
         skips: i.title_id !== null ? skips.get(i.title_id) : undefined,
         episodeIds: i.title_id !== null ? episodeIds.get(i.title_id) : undefined,
-      }),
+        }),
+      ),
     );
     out.set(listId, { entries, summary: summarize(entries), nextIndex: nextIndex(entries) });
   }
@@ -210,10 +223,50 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
     const episodeId = e.kind === 'episode' ? c.episodeIds?.get(key(i.season_number!, i.episode_number!)) : undefined;
     jellyfinItemId = episodeId ?? c.status?.jellyfinItemId ?? null;
   }
-  return { ...e, skipped, jellyfinItemId };
+  return { ...e, skipped, jellyfinItemId, header: false, parts: null };
 }
 
-function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<TimelineEntry, 'skipped' | 'jellyfinItemId'> {
+/**
+ * Turns whole-show entries into headers when seasons or episodes of the same show follow them in
+ * the list. Such lists use the show as a section title; counting it as the whole show would double
+ * the watch time and hold Up Next on it until every episode is watched. A show entry with no parts
+ * after it still stands for the whole show.
+ */
+export function markHeaders(entries: TimelineEntry[]): TimelineEntry[] {
+  const later = new Map<number, TimelineEntry[]>();
+  const out = [...entries];
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    const id = e.matched ? e.title?.id : undefined;
+    if (id === undefined) continue;
+    if (e.kind === 'season' || e.kind === 'episode') later.set(id, [...(later.get(id) ?? []), e]);
+    else if (e.kind === 'show' && later.has(id)) out[i] = asHeader(e, later.get(id)!);
+  }
+  return out;
+}
+
+function asHeader(e: TimelineEntry, parts: TimelineEntry[]): TimelineEntry {
+  const counted = parts.filter((p) => !p.skipped);
+  const watched = counted.filter((p) => p.state === 'watched').length;
+  const started = watched > 0 || counted.some((p) => p.state === 'in_progress');
+  const state: EntryState = counted.length > 0 && watched === counted.length ? 'watched' : started ? 'in_progress' : 'unwatched';
+  return {
+    ...e,
+    header: true,
+    parts: parts.length,
+    episodes: null,
+    seasons: null,
+    watchedEpisodes: null,
+    runtime: null,
+    watchedMinutes: 0,
+    state,
+    percent: counted.length ? Math.round((watched / counted.length) * 100) : 0,
+    watchedAt: null,
+    skipped: counted.length === 0,
+  };
+}
+
+function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<TimelineEntry, 'skipped' | 'jellyfinItemId' | 'header' | 'parts'> {
   const matched = i.match_status === 'matched' && Boolean(c.row);
   const mediaType = c.row?.media_type ?? i.media_type;
   const kind: EntryKind = i.season_number !== null ? (i.episode_number !== null ? 'episode' : 'season') : mediaType === 'tv' ? 'show' : 'movie';
@@ -344,7 +397,8 @@ function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<Timel
 
 export function summarize(entries: TimelineEntry[]): TimelineSummary {
   const sum: TimelineSummary = {
-    entries: entries.length,
+    entries: 0,
+    headers: 0,
     films: 0,
     shows: 0,
     seasons: 0,
@@ -358,6 +412,11 @@ export function summarize(entries: TimelineEntry[]): TimelineSummary {
     unmatched: 0,
   };
   for (const e of entries) {
+    if (e.header) {
+      sum.headers++;
+      continue;
+    }
+    sum.entries++;
     if (e.kind === 'movie') sum.films++;
     else {
       if (e.kind === 'show') {
@@ -437,6 +496,6 @@ export function autoOrder(entries: TimelineEntry[], by: AutoOrder, dates: Map<nu
 }
 
 function nextIndex(entries: TimelineEntry[]): number | null {
-  const i = entries.findIndex((e) => e.matched && e.state !== 'watched' && !e.skipped);
+  const i = entries.findIndex((e) => e.matched && e.state !== 'watched' && !e.skipped && !e.header);
   return i < 0 ? null : i;
 }

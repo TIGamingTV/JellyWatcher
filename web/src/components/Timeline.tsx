@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { AlertTriangle, Check, Circle, GripVertical, Plus, SkipForward, Trash2, Undo2 } from 'lucide-react';
+import { AlertTriangle, Check, Circle, GripVertical, Plus, SkipForward, Trash2, Tv, Undo2 } from 'lucide-react';
 import { entryRequestable } from '../../../shared/status';
 import type { Timeline, TimelineEntry, TimelineSummary } from '../lib/types';
 import { useUser } from '../lib/session';
 import { date, duration, plural } from '../lib/format';
-import { entryFacts, entryHeading, scopeOf } from '../lib/timeline';
+import { entryFacts, entryHeading, nextEntryIndex, scopeOf } from '../lib/timeline';
 
 export { entryFacts, entryHeading, scopeOf };
 import { PosterImage } from './Poster';
@@ -78,7 +78,21 @@ function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, o
   const facts = entryFacts(e);
   const progressLabel =
     e.state === 'in_progress' && e.episodes ? `${e.watchedEpisodes ?? 0} of ${plural(e.episodes, 'episode')}` : e.state === 'in_progress' ? `${e.percent}% watched` : null;
-  const kicker = e.skipped ? 'Not Watching' : next ? 'Up Next' : e.state === 'watched' ? (e.watchedAt ? `Watched ${date(e.watchedAt)}` : 'Watched') : e.state === 'in_progress' ? 'Watching' : null;
+  const kicker = e.header
+    ? e.state === 'watched'
+      ? 'Watched'
+      : null
+    : e.skipped
+      ? 'Not Watching'
+      : next
+        ? 'Up Next'
+        : e.state === 'watched'
+          ? e.watchedAt
+            ? `Watched ${date(e.watchedAt)}`
+            : 'Watched'
+          : e.state === 'in_progress'
+            ? 'Watching'
+            : null;
   const name = `${title}${part ? `, ${part}` : ''}`;
   const body = (
     <>
@@ -97,7 +111,7 @@ function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, o
           ))}
           {progressLabel && <span>{progressLabel}</span>}
         </div>
-        {e.state === 'in_progress' && (
+        {e.state === 'in_progress' && !e.header && (
           <div className="progress" aria-hidden>
             <i style={{ width: `${e.percent}%` }} />
           </div>
@@ -107,9 +121,9 @@ function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, o
   );
   const label = `${e.position}. ${name}. ${facts.join(', ')}. ${kicker ?? ''}`;
   return (
-    <li className={`tl-item ${e.state}${e.skipped ? ' skipped' : ''}${next ? ' next' : ''}`} style={{ ['--pct' as string]: e.percent }} aria-current={next ? 'step' : undefined} data-item={e.itemId}>
+    <li className={`tl-item ${e.state}${e.header ? ' header' : ''}${e.skipped && !e.header ? ' skipped' : ''}${next ? ' next' : ''}`} style={{ ['--pct' as string]: e.percent }} aria-current={next ? 'step' : undefined} data-item={e.itemId}>
       <span className="tl-node" aria-hidden>
-        {e.state === 'watched' ? <Check size={14} strokeWidth={3} /> : e.skipped ? <SkipForward size={12} strokeWidth={2.5} /> : e.position}
+        {e.header ? <Tv size={13} strokeWidth={2.5} /> : e.state === 'watched' ? <Check size={14} strokeWidth={3} /> : e.skipped ? <SkipForward size={12} strokeWidth={2.5} /> : e.position}
       </span>
       {e.title && !editing ? (
         <Link to={`/titles/${e.title.id}`} className="tl-card" aria-label={label}>
@@ -125,7 +139,7 @@ function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, o
               <Trash2 size={17} />
             </button>
           )
-        ) : (
+        ) : e.header ? null : (
           <>
             {e.matched ? (
               e.state !== 'watched' &&
@@ -237,7 +251,7 @@ export function TimelineView({
     if (!drag.current) setEntries(timeline.entries);
   }, [timeline.entries]);
 
-  const nextIndex = entries.findIndex((e) => e.matched && e.state !== 'watched' && !e.skipped);
+  const nextIndex = nextEntryIndex(entries);
   const skip = useSkipToggle();
   const onSkip = (e: TimelineEntry) => {
     if (!e.title) return;

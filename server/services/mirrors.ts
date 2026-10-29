@@ -78,7 +78,8 @@ export function mirrorPayload(ctx: AppContext): MirrorPayload {
     const entriesByList = new Map<number, { titleId: number; e: TimelineEntry }[]>();
     const titleIds = new Set<number>();
     for (const l of rows) {
-      const picked = (timelines.get(l.id)?.entries ?? []).filter((e) => e.matched && e.title && !e.skipped).map((e) => ({ titleId: e.title!.id, e }));
+      // Headers only title the parts below them; the parts are mirrored in their own places.
+      const picked = (timelines.get(l.id)?.entries ?? []).filter((e) => e.matched && e.title && !e.skipped && !e.header).map((e) => ({ titleId: e.title!.id, e }));
       for (const p of picked) titleIds.add(p.titleId);
       entriesByList.set(l.id, picked);
     }
