@@ -37,7 +37,7 @@ export interface HttpResponse<T> {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-export const USER_AGENT = 'JellyWatcher/0.5 (+self-hosted)';
+export const USER_AGENT = 'JellyWatcher/0.6 (+self-hosted)';
 
 export function parseRetryAfter(value: string | null): number | undefined {
   if (!value) return undefined;
