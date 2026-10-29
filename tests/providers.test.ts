@@ -239,6 +239,13 @@ describe('Seerr', () => {
 });
 
 describe('HttpClient', () => {
+  it('appends parameters without re-encoding a query string that is already in the path', () => {
+    const c = new HttpClient({ provider: 't', baseUrl: 'http://x/api/v1/' });
+    expect(c.buildUrl('/search?query=past%20lives%3A%20it%27s', { page: 2 })).toBe('http://x/api/v1/search?query=past%20lives%3A%20it%27s&page=2');
+    expect(c.buildUrl('/search/multi', { query: 'past lives', page: 1, skip: undefined })).toBe('http://x/api/v1/search/multi?query=past%20lives&page=1');
+    expect(c.buildUrl('/status')).toBe('http://x/api/v1/status');
+  });
+
   it('retries 429 honouring Retry-After, then succeeds', async () => {
     const fetchImpl = vi
       .fn()

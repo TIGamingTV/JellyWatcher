@@ -87,12 +87,20 @@ export class HttpClient {
     await turn;
   }
 
+  /**
+   * Appends query parameters without re-serialising a query string that is already part of `path`.
+   * (URLSearchParams would rewrite `%20` as `+`, which Seerr's API validator rejects as a reserved
+   * character.) Values are percent-encoded, so spaces become `%20`.
+   */
   buildUrl(path: string, query?: RequestOptions['query']): string {
-    const url = new URL(this.opts.baseUrl + (path.startsWith('/') ? path : `/${path}`));
-    for (const [k, v] of Object.entries(query ?? {})) {
-      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-    }
-    return url.toString();
+    const base = this.opts.baseUrl + (path.startsWith('/') ? path : `/${path}`);
+    const extra = Object.entries(query ?? {})
+      .filter(([, v]) => v !== undefined && v !== null)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+    if (extra.length === 0) return new URL(base).toString();
+    const [beforeHash, hash] = base.split('#', 2) as [string, string | undefined];
+    const sep = beforeHash.includes('?') ? (beforeHash.endsWith('?') || beforeHash.endsWith('&') ? '' : '&') : '?';
+    return new URL(`${beforeHash}${sep}${extra.join('&')}${hash !== undefined ? `#${hash}` : ''}`).toString();
   }
 
   async request<T = unknown>(req: RequestOptions): Promise<HttpResponse<T>> {

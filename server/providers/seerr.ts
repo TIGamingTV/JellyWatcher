@@ -163,7 +163,8 @@ export class SeerrClient {
   }
 
   async search(query: string, page = 1, asUser?: number | null): Promise<{ hits: SeerrSearchHit[]; totalPages: number }> {
-    const res = await this.http.get(`/search?query=${encodeSeerrQuery(query)}`, { page }, { headers: this.asUser(asUser) });
+    // The query is encoded like Seerr's own web client; page goes into the same hand-built string.
+    const res = await this.http.get(`/search?query=${encodeSeerrQuery(query)}&page=${page}`, undefined, { headers: this.asUser(asUser) });
     return this.parseResults(res.data);
   }
 

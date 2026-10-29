@@ -178,6 +178,14 @@ export function createMocks() {
     if (url.origin === SEERR.url) {
       const p = url.pathname.replace('/api/v1', '');
       state.seerrCalls.push({ method, path: p + url.search, apiUser: headers.get('x-api-user'), body });
+      // Seerr validates requests with express-openapi-validator, which rejects query values that
+      // contain unencoded reserved characters (a space serialised as `+` included).
+      for (const pair of url.search.replace(/^\?/, '').split('&').filter(Boolean)) {
+        const [name, value = ''] = pair.split('=');
+        if (/[/?#[\]@!$&'()*+,;=]/.test(value)) {
+          return json({ message: `Parameter '${name}' must be url encoded. Its value may not contain reserved characters.` }, 400);
+        }
+      }
       if (p === '/status') return json({ version: '3.5.1', commitTag: 'v3.5.1' });
       if (headers.get('x-api-key') !== SEERR.key) return json({ message: 'Unauthorized' }, 403);
       if (p === '/auth/me') return json({ id: 1, displayName: 'Admin', permissions: 2 });
