@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { HttpClient, type FetchLike } from '../http/client.js';
 import { ProviderError } from '../http/errors.js';
 import type { MatchCandidate, MediaType } from '../domain/matching.js';
+import type { ListFetchResult, SourceItem } from './types.js';
 
 /**
  * TMDb API v3 adapter (Bearer "API Read Access Token"). Used for metadata and identifier resolution.
@@ -96,8 +97,51 @@ const Details = z.object({
     .nullish(),
 });
 
+/** Accepts themoviedb.org/list/<id>[-slug] links (any language prefix or query). */
+export function parseTmdbListUrl(input: string): number | null {
+  let url: URL;
+  try {
+    url = new URL(input.trim());
+  } catch {
+    return null;
+  }
+  if (!/^(www\.)?themoviedb\.org$/i.test(url.hostname)) return null;
+  const m = url.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?list\/(\d{1,10})(?:-[^/]*)?\/?$/i);
+  return m ? Number(m[1]) : null;
+}
+
+const ListResult = Result.extend({ media_type: z.string().nullish() });
+const ListPage = z.object({
+  id: z.number(),
+  name: z.string().nullish(),
+  description: z.string().nullish(),
+  public: z.boolean().nullish(),
+  created_by: z.object({ username: z.string().nullish(), name: z.string().nullish() }).nullish(),
+  total_pages: z.number().nullish(),
+  total_results: z.number().nullish(),
+  results: z.array(ListResult),
+  comments: z.record(z.string(), z.string().nullish()).nullish(),
+});
+
+export function tmdbListItem(r: z.infer<typeof ListResult>, position: number, comments?: Record<string, string | null | undefined> | null): SourceItem | null {
+  const type = r.media_type === 'movie' ? 'movie' : r.media_type === 'tv' ? 'tv' : null;
+  if (!type) return null;
+  return {
+    sourceKey: `tmdb:${type}:${r.id}`,
+    title: r.title ?? r.name ?? `TMDb ${r.id}`,
+    year: yearOf(r.release_date ?? r.first_air_date),
+    mediaType: type,
+    tmdbId: r.id,
+    sourceUrl: `https://www.themoviedb.org/${type}/${r.id}`,
+    position,
+    notes: comments?.[`${type}:${r.id}`]?.slice(0, 2000) || null,
+  };
+}
+
 export class TmdbClient {
   readonly http: HttpClient;
+  /** API v4, used for lists (same read access token). */
+  private readonly v4: HttpClient;
 
   constructor(token: string, fetchImpl?: FetchLike) {
     this.http = new HttpClient({
@@ -108,6 +152,49 @@ export class TmdbClient {
       retries: 3,
       fetchImpl,
     });
+    this.v4 = new HttpClient({ provider: 'tmdb', baseUrl: 'https://api.themoviedb.org/4', headers: () => ({ Authorization: `Bearer ${token}` }), minIntervalMs: 30, retries: 3, fetchImpl });
+  }
+
+  /** Reads a whole public list in its own order (pages of 20). */
+  async list(listId: number): Promise<ListFetchResult> {
+    const items: SourceItem[] = [];
+    let skipped = 0;
+    let first: z.infer<typeof ListPage> | null = null;
+    for (let page = 1; page <= 250; page++) {
+      let data: unknown;
+      try {
+        data = (await this.v4.get(`/list/${listId}`, { page })).data;
+      } catch (err) {
+        if (err instanceof ProviderError && err.kind === 'not_found') throw new ProviderError('tmdb', 'not_found', 'No TMDb list was found at that link.');
+        if (err instanceof ProviderError && (err.kind === 'auth' || err.kind === 'forbidden')) {
+          throw new ProviderError('tmdb', 'forbidden', 'That TMDb list is private, or the TMDb token in Integrations is not valid.');
+        }
+        throw err;
+      }
+      const p = ListPage.safeParse(data);
+      if (!p.success) throw new ProviderError('tmdb', 'invalid_response');
+      first ??= p.data;
+      for (const r of p.data.results) {
+        const item = tmdbListItem(r, items.length + skipped + 1, p.data.comments);
+        if (item) items.push(item);
+        else skipped++;
+      }
+      if (page >= (p.data.total_pages ?? 1) || p.data.results.length === 0) break;
+    }
+    const l = first!;
+    return {
+      info: {
+        externalId: `list:${l.id}`,
+        name: l.name || `TMDb list ${l.id}`,
+        kind: 'public',
+        description: l.description || null,
+        ownerName: l.created_by?.username ?? l.created_by?.name ?? null,
+        url: `https://www.themoviedb.org/list/${l.id}`,
+        itemCount: l.total_results ?? null,
+      },
+      items,
+      skipped,
+    };
   }
 
   async validate(): Promise<void> {

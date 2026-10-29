@@ -37,19 +37,25 @@ export function useRefreshMe() {
 }
 
 // ---- Toasts --------------------------------------------------------------------------------
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
 interface Toast {
   id: number;
   kind: 'success' | 'error' | 'info';
   text: string;
+  action?: ToastAction;
 }
-const ToastCtx = createContext<(kind: Toast['kind'], text: string) => void>(() => undefined);
+type Push = (kind: Toast['kind'], text: string, action?: ToastAction) => void;
+const ToastCtx = createContext<Push>(() => undefined);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const push = useCallback((kind: Toast['kind'], text: string) => {
+  const push = useCallback<Push>((kind, text, action) => {
     const id = Date.now() + Math.random();
-    setToasts((t) => [...t.slice(-2), { id, kind, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 7000 : 4000);
+    setToasts((t) => [...t.slice(-2), { id, kind, text, action }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 7000 : action ? 6000 : 4000);
   }, []);
   const value = useMemo(() => push, [push]);
   return (
@@ -59,7 +65,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((t) => (
           <div key={t.id} className={`toast toast-${t.kind}`}>
             {t.kind === 'error' ? <AlertCircle size={18} aria-hidden /> : <CheckCircle2 size={18} aria-hidden />}
-            <span>{t.text}</span>
+            <span style={{ flex: 1 }}>{t.text}</span>
+            {t.action && (
+              <button
+                className="btn btn-small btn-plain"
+                onClick={() => {
+                  setToasts((all) => all.filter((x) => x.id !== t.id));
+                  t.action!.onClick();
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
           </div>
         ))}
       </div>

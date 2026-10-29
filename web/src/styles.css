@@ -472,6 +472,10 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
 .provider-jellyfin { background: #7b4fc9; }
 .provider-seerr { background: #6366f1; }
 .provider-tmdb { background: #01b4e4; color: #0d253f; }
+.provider-myanimelist { background: #2e51a2; }
+.provider-anilist { background: #02a9ff; color: #0b1622; }
+.provider-simkl { background: #0b0f10; }
+.provider-mdblist { background: #e5a00d; color: #111; }
 .provider-local { background: var(--accent-fill); color: var(--on-accent); }
 .table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
 .table th { text-align: left; font-weight: 600; color: var(--label-2); font-size: 0.75rem; padding: 10px 16px; border-bottom: 1px solid var(--separator); }
@@ -542,13 +546,19 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
   .tl-item { grid-template-columns: 28px 42px minmax(0, 1fr) auto; row-gap: 6px; }
   .tl-side { display: contents; }
   .tl-side > .pill { grid-column: 3; grid-row: 2; justify-self: start; }
-  .tl-side > .tl-check, .tl-side > .tl-remove { grid-column: 4; grid-row: 1; }
+  .tl-side > .tl-actions, .tl-side > .tl-remove { grid-column: 4; grid-row: 1; }
 }
 
 /* Watched toggle and reordering on timeline rows */
 .tl-check { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 0; background: transparent; color: var(--label-3); display: grid; place-items: center; cursor: pointer; transition: background 0.15s, color 0.15s; }
 .tl-check:hover { color: var(--accent); background: var(--accent-tint); }
 .tl-check.on { color: var(--on-accent); background: var(--accent-fill); width: 30px; height: 30px; margin: 2px; }
+.tl-actions { display: flex; align-items: center; gap: 2px; }
+.tl-skip.on { color: var(--label-2); background: var(--surface-2); }
+.tl-skip:hover { color: var(--label); background: var(--surface-hover); }
+.tl-item.skipped .tl-thumb, .tl-item.skipped .tl-title, .tl-item.skipped .tl-sub { opacity: 0.55; }
+.tl-item.skipped .tl-title { text-decoration: line-through; text-decoration-color: var(--label-3); }
+.tl-item.skipped .tl-node { border-style: dashed; color: var(--label-3); }
 @media (pointer: coarse) { .tl-check { width: 44px; height: 44px; } .tl-check.on { width: 36px; height: 36px; margin: 4px; } }
 .tl-handle { touch-action: none; -webkit-user-select: none; user-select: none; width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--label-2); cursor: grab; }
 .tl-handle:hover { background: var(--surface-hover); }

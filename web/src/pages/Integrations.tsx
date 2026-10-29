@@ -48,6 +48,7 @@ export function IntegrationsPage() {
     },
     ...s.sources.map((src) => ({
       id: src.id,
+      href: src.id === 'trakt' || src.id === 'letterboxd' ? `/integrations/${src.id}` : `/integrations/sources/${src.id}`,
       name: src.name,
       sub:
         src.id === 'trakt'
@@ -61,8 +62,14 @@ export function IntegrationsPage() {
           : src.id === 'letterboxd'
             ? src.connection
               ? `${src.connection.accountName} · ${src.listCount} ${src.listCount === 1 ? 'list' : 'lists'}`
-              : `${src.listCount ? `${src.listCount} imported ${src.listCount === 1 ? 'list' : 'lists'}` : 'Import by file upload'}`
-            : `${src.listCount ? `${src.listCount} imported ${src.listCount === 1 ? 'list' : 'lists'}` : 'Import by file upload'}`,
+              : `${src.listCount ? `${src.listCount} ${src.listCount === 1 ? 'list' : 'lists'}` : 'Add lists by link or file'}`
+            : src.listCount
+              ? `${src.listCount} ${src.listCount === 1 ? 'list' : 'lists'}`
+              : src.link && src.upload
+                ? 'Add lists by link or file'
+                : src.link
+                  ? 'Add lists by link'
+                  : 'Import by file upload',
       ok: src.id === 'trakt' ? src.connection?.status === 'connected' : src.listCount > 0,
     })),
   ];
@@ -96,7 +103,7 @@ export function IntegrationsPage() {
           </h2>
           <div className="group">
             {account.map((a) => (
-              <Link key={a.id + a.name} to={`/integrations/${a.id}`} className="row row-link">
+              <Link key={a.id + a.name} to={'href' in a && a.href ? a.href : `/integrations/${a.id}`} className="row row-link">
                 <ProviderMark provider={a.id} size={36} />
                 <div className="row-main">
                   <div className="row-title">{a.name}</div>

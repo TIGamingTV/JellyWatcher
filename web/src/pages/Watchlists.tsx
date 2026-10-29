@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { AlertTriangle, ArrowDownUp, Copy, ExternalLink, ListPlus, ListVideo, Pencil, Plus, RotateCcw, Search, Trash2, Upload, Wand2, X } from 'lucide-react';
+import { AlertTriangle, ArrowDownUp, CalendarClock, Copy, ExternalLink, ListPlus, ListVideo, Pencil, Plus, RotateCcw, Search, Trash2, Upload, Wand2, X } from 'lucide-react';
 import { del, errorText, get, patch, post, put, qs } from '../lib/api';
 import { useToast, useUser } from '../lib/session';
-import type { ListView, Timeline, TimelineEntry, TitleCard } from '../lib/types';
+import type { ListView, Timeline, TimelineEntry, TitleCard, UploadSource } from '../lib/types';
 import { LIST_KIND_LABEL, PROVIDER_NAME, duration, plural } from '../lib/format';
 import { Banner, CenterLoading, ConfirmSheet, EmptyState, ErrorState, PageHeader, PosterSkeletons, ProviderMark, SearchField, Segmented, Sheet, Spinner, SyncButton, Time, Toggle } from '../components/ui';
 import { PosterGrid, PosterImage } from '../components/Poster';
@@ -429,7 +429,7 @@ function ListDetail() {
         </div>
         {upload && (
           <p className="footnote secondary" style={{ marginTop: 10, marginBottom: 0 }}>
-            {PROVIDER_NAME[l.provider]} offers no API for personal projects, so this list updates when you upload a newer export. Duplicate it to add titles yourself.
+            This list was imported from a file, so it updates when you upload a newer export (or add the list by its link, where {PROVIDER_NAME[l.provider]} allows it). Duplicate it to add titles yourself.
           </p>
         )}
         {l.canSync && (
@@ -488,10 +488,10 @@ function ListDetail() {
           )}
         </div>
       </Sheet>
-      {(l.provider === 'letterboxd' || l.provider === 'imdb') && (
+      {upload && l.provider !== 'trakt' && l.provider !== 'local' && (
         <Sheet open={replacing} onClose={() => setReplacing(false)} title="Upload New Export">
-          <p className="secondary subhead">Upload the latest CSV for this list. Titles no longer in the file are removed; your match decisions are kept.</p>
-          <UploadBox provider={l.provider} replaceListId={l.id} onDone={() => setReplacing(false)} />
+          <p className="secondary subhead">Upload the latest export for this list. Titles no longer in the file are removed; your match decisions are kept.</p>
+          <UploadBox provider={l.provider as UploadSource} replaceListId={l.id} onDone={() => setReplacing(false)} />
         </Sheet>
       )}
       {duplicating && <DuplicateSheet list={l} open onClose={() => setDuplicating(false)} />}
@@ -507,6 +507,7 @@ function ListContent({ list, onDisplay, onDiscover }: { list: ListView; onDispla
   const toast = useToast();
   const invalidate = useInvalidateLists();
   const [editing, setEditing] = useState(false);
+  const [sorting, setSorting] = useState(false);
   const [removing, setRemoving] = useState<TimelineEntry | null>(null);
   const timeline = useQuery({
     queryKey: ['lists', list.id, 'timeline'],
@@ -571,6 +572,11 @@ function ListContent({ list, onDisplay, onDiscover }: { list: ListView; onDispla
             )}
           </button>
         )}
+        {view === 'timeline' && count > 1 && !editing && (
+          <button className="btn btn-gray" onClick={() => setSorting(true)} aria-haspopup="dialog">
+            <CalendarClock size={15} aria-hidden /> Auto Sort
+          </button>
+        )}
         {view === 'timeline' && list.customOrder && (
           <button className="btn btn-plain" onClick={resetOrder}>
             <RotateCcw size={14} aria-hidden /> {list.editable ? 'Reset Order' : `Use ${PROVIDER_NAME[list.provider]} Order`}
@@ -606,6 +612,7 @@ function ListContent({ list, onDisplay, onDiscover }: { list: ListView; onDispla
           <TimelineView timeline={timeline.data!} editing={editing} removable={list.editable} onOrder={saveOrder} onRemove={setRemoving} />
         </div>
       )}
+      {sorting && <AutoSortSheet list={list} onClose={() => setSorting(false)} />}
       <ConfirmSheet
         open={Boolean(removing)}
         onClose={() => setRemoving(null)}
@@ -616,6 +623,70 @@ function ListContent({ list, onDisplay, onDiscover }: { list: ListView; onDispla
         message="It is removed from this list only. Watched marks stay."
       />
     </>
+  );
+}
+
+const SORTS = [
+  { value: 'release', label: 'Release Date', detail: 'A timeline in the order things came out: movies by release, seasons and episodes by air date.' },
+  { value: 'release_desc', label: 'Newest First', detail: 'The most recent releases first.' },
+  { value: 'title', label: 'Title', detail: 'A to Z, with the seasons of a show in order.' },
+  { value: 'runtime', label: 'Shortest First', detail: 'Quick watches first, by total runtime.' },
+] as const;
+
+/** Sorts a list automatically (saved as your order), e.g. into release order for lists without one. */
+function AutoSortSheet({ list, onClose }: { list: ListView; onClose: () => void }) {
+  const [by, setBy] = useState<(typeof SORTS)[number]['value']>('release');
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const invalidate = useInvalidateLists();
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await post<{ ordered: number; withoutDate: number }>(`/lists/${list.id}/order/auto`, { by });
+      invalidate();
+      toast('success', `Sorted ${plural(r.ordered, 'entry', 'entries')}${r.withoutDate ? `; ${r.withoutDate} without a known date are at the end` : ''}.`);
+      onClose();
+    } catch (err) {
+      toast('error', errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      title="Auto Sort"
+      footer={
+        <>
+          <button className="btn btn-gray" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={run} disabled={busy}>
+            {busy && <Spinner />}
+            Sort List
+          </button>
+        </>
+      }
+    >
+      <div className="stack">
+        <div className="group" role="radiogroup" aria-label="Sort by" style={{ background: 'var(--surface-2)' }}>
+          {SORTS.map((o) => (
+            <label key={o.value} className="row" style={{ cursor: 'pointer' }}>
+              <input type="radio" name="auto-sort" value={o.value} checked={by === o.value} onChange={() => setBy(o.value)} style={{ width: 18, height: 18, accentColor: 'var(--accent-fill)' }} />
+              <div className="row-main">
+                <div className="row-title">{o.label}</div>
+                <div className="row-sub">{o.detail}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+        <p className="footnote secondary" style={{ margin: 0 }}>
+          The result is saved as your order, so you can still drag entries around afterwards.{' '}
+          {list.editable ? 'Reset Order brings back the order you added them in.' : `“Use ${PROVIDER_NAME[list.provider]} Order” brings back the original order.`}
+        </p>
+      </div>
+    </Sheet>
   );
 }
 

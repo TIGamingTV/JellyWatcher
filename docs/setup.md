@@ -4,17 +4,17 @@
 
 Requirements: Docker with Compose v2.24 or newer (`env_file.required`), and about 150 MB of disk space
 plus the image cache. Images are published to `ghcr.io/tigamingtv/jellywatcher` for `linux/amd64` and
-`linux/arm64`. Tags: `latest`, an exact version (`0.3.1`) and a minor line (`0.3`).
+`linux/arm64`. Tags: `latest`, an exact version (`0.4.0`) and a minor line (`0.4`).
 
 ```bash
-mkdir jellywatcher && cd jellywatcher
+mkdir -p jellywatcher/data && cd jellywatcher
 curl -fsSLO https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/compose.yaml
 curl -fsSL -o .env https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/.env.example   # optional
-mkdir -p data && sudo chown 1000:1000 data
+sudo chown 1000:1000 data
 docker compose up -d
 ```
 
-The [README](../README.md#setup) contains the full `compose.yaml` if you prefer to paste it.
+The [README](../README.md#install) contains the full `compose.yaml` if you prefer to paste it.
 
 Without Compose:
 
@@ -107,25 +107,44 @@ signs in with Jellyfin.
 
 ## 4. Add watchlists
 
-Watchlists › Lists › **Add List**:
+Watchlists › Lists › **Add List**. The quickest way is to paste a list link into the field at the top;
+JellyWatcher recognises the service. Lists added by link keep their order and sync automatically.
 
-- **Any list link:** paste a public IMDb list (`imdb.com/list/ls…`, any language prefix) or a Trakt
-  list or watchlist link. No sign-in is needed; the list keeps its order and syncs automatically.
-  Trakt links need the Trakt app from Integrations › Trakt (Client ID only).
-- **Trakt:**
-  1. Connect your account in Integrations › Trakt by entering a code at trakt.tv/activate.
-  2. Add your Watchlist, your own lists and the lists you liked.
-  3. Any **public list** can be added by pasting its link (franchises, filmographies, community lists) or found under *Public Lists*.
-- **Letterboxd:**
-  - Upload the export ZIP (letterboxd.com › Settings › Data › Export Your Data) or a single list CSV.
-  - Optionally add your username for the RSS diary.
-- **IMDb:** paste a public list link, or upload the CSV from the Export icon on your Watchlist or a
-  private list (uploaded files skip episodes; links include them).
+| Source | Links | Files |
+| --- | --- | --- |
+| **Trakt** | Public lists and watchlists (`trakt.tv/users/…/lists/…`, `…/watchlist`). Needs the Trakt app from Integrations › Trakt (Client ID). Connect your account there for your own watchlist, lists and liked lists. | — |
+| **Letterboxd** | Public lists and watchlists (`letterboxd.com/name/list/…`, `letterboxd.com/name/watchlist/`, `boxd.it/…`). Your own watchlist link replaces an uploaded one. | The export ZIP (letterboxd.com › Settings › Data › Export Your Data) or a single list CSV. Optionally add your username for the RSS diary. |
+| **IMDb** | Public lists (`imdb.com/list/ls…`, any language prefix), with episodes. | The CSV from the Export icon of your Watchlist or a private list (episodes skipped). |
+| **TMDb** | Public lists (`themoviedb.org/list/…`). Needs the TMDb token in Integrations › TMDb. | A CSV with a TMDb ID column (and ideally a type column). |
+| **MyAnimeList** | Public anime lists (`myanimelist.net/animelist/name?status=6`; the status picks the list, Plan to Watch by default). | The anime list export (`.xml.gz`, Profile › Export Lists). |
+| **AniList** | Anime lists (`anilist.co/user/name/animelist/Planning`, or any list name; Planning by default). | A MyAnimeList-format XML. |
+| **Simkl** | — (Simkl shares lists only with signed-in apps) | The Simkl export: CSV, JSON or ZIP. |
+| **MDBList** | Public lists (`mdblist.com/lists/name/list-name`). | The list's CSV export. |
 
-Lists whose name suggests a watch order ("timeline", "chronological", "watch order", …) open as a
-**timeline**: every entry in list order, including single seasons and episodes, with film, show,
-season and episode counts and the watch time left. Switch any list between Timeline and Grid on its
-page. Home shows **Up Next**, the next unwatched entry of every list, with a Request button.
+Files that contain several statuses (MyAnimeList, Simkl, CSVs with a status column) become one list
+per status: Plan to Watch, Watching and On Hold. Completed and dropped entries are skipped.
+
+Anime from MyAnimeList, AniList and Simkl are matched to TMDb with the community
+[Fribb/anime-lists](https://github.com/Fribb/anime-lists) mapping (downloaded once, cached in
+`data/cache/`), so *Attack on Titan Season 2* becomes season 2 of the TMDb show *Attack on Titan*.
+
+### Timelines, order and Up Next
+
+Every list opens as a **timeline**: each entry in list order, including single seasons and episodes,
+with film, show, season and episode counts and the watch time left. Switch any list to a poster grid
+with *Grid*.
+
+- **Reorder** lets you drag entries (or move them with the arrow keys). Your order is kept across
+  syncs; *Use … Order* goes back to the source's order.
+- **Auto Sort** sorts a list for you, handy for lists without a real order (watchlists, anime lists):
+  by release date (movies by release, seasons and episodes by air date), newest first, title, or
+  shortest first. The result is saved as your order, so you can still adjust it by hand.
+- The **circle** on an entry marks it watched (with a date). The **skip** button next to it marks it
+  *Not Watching*: Up Next passes over it and its time no longer counts as left to watch. Tap it again
+  to put the entry back.
+
+Home shows **Up Next**: the next entry of every list that is neither watched nor skipped, with
+Watch / Request, Watched and Skip.
 
 Entries without IDs are matched in the background. Anything uncertain appears under
 **Watchlists › Needs Review**.

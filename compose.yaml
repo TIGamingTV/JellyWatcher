@@ -1,31 +1,31 @@
-# JellyWatcher — example Docker Compose deployment.
+# JellyWatcher — Docker Compose
 #
 #   mkdir -p data && sudo chown 1000:1000 data
 #   docker compose up -d
 #   docker compose logs jellywatcher | grep "setup code"
 #
-# Then open http://<host>:8484 and complete the setup.
-# Optional settings go in a .env file next to this one (see .env.example).
+# Then open http://<host>:8484 and follow the setup. Everything else is configured in the web UI.
 
 services:
   jellywatcher:
-    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.3.1
-    # To build from source instead (inside a clone of the repository), replace `image:` with:
-    # build: .
+    image: ghcr.io/tigamingtv/jellywatcher:latest   # or pin a version, e.g. :0.4.0
+    # build: .                                      # instead of `image:` to build from a clone
     container_name: jellywatcher
     restart: unless-stopped
     init: true
-    env_file:
+    ports:
+      - "${JW_HOST_PORT:-8484}:8484"   # host port: 8484, or JW_HOST_PORT from .env
+    environment:
+      TZ: ${TZ:-UTC}                # time zone, e.g. Europe/Berlin (or TZ in .env)
+      # Only behind a reverse proxy (see docs/operations.md):
+      # JW_PUBLIC_URL: https://watch.example.com
+      # JW_TRUST_PROXY: "true"
+    env_file:                       # optional extra settings, see .env.example
       - path: .env
         required: false
-    environment:
-      TZ: ${TZ:-UTC}
-    ports:
-      - "${JW_HOST_PORT:-8484}:8484"
     volumes:
-      # Database, encryption key, image cache, logs and automatic pre-upgrade backups.
-      - ./data:/data
-    # Hardening: the app only needs to write to /data.
+      - ./data:/data                # database, encryption key, cache, logs, backups
+    # Hardening: the app only writes to /data.
     read_only: true
     tmpfs:
       - /tmp
@@ -38,8 +38,8 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # If Jellyfin and Seerr run in Compose on the same host, join their network so you can use
-    # container names (e.g. http://jellyfin:8096) as the server URLs in Integrations.
+    # Jellyfin and Seerr in Compose on the same host? Join their network and use container
+    # names (e.g. http://jellyfin:8096) as server URLs in Integrations:
     # networks:
     #   - media
 

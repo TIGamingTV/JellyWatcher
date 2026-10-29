@@ -18,6 +18,7 @@ export interface MockState {
   seerrCalls: { method: string; path: string; apiUser: string | null; body?: unknown }[];
   traktCalls: string[];
   imdbCalls: { id: string; after: string | null }[];
+  letterboxdCalls: string[];
   /** Jellyfin item ids hidden from the library (simulates deleting after watching). */
   jellyfinRemoved: Set<string>;
   logouts: number;
@@ -39,6 +40,7 @@ export function createMocks() {
     seerrCalls: [],
     traktCalls: [],
     imdbCalls: [],
+    letterboxdCalls: [],
     jellyfinRemoved: new Set(),
     logouts: 0,
     quickConnectEnabled: true,
@@ -292,6 +294,85 @@ export function createMocks() {
           },
         },
       });
+    }
+
+    // ---- Letterboxd public list pages (HTML)
+    if (url.origin === 'https://letterboxd.com') {
+      state.letterboxdCalls.push(url.pathname);
+      const poster = (slug: string, name: string, i: number) =>
+        `<li class="posteritem" data-object-id="filmListEntry:${i}"><div class="react-component" data-component-class="LazyPoster" data-item-name="${name}" data-item-slug="${slug}" data-item-link="/film/${slug}/" data-list-index="${i}"></div></li>`;
+      const page = (title: string, items: string, pager: string) =>
+        `<!DOCTYPE html><html><head><meta property="og:title" content="${title}"><meta property="og:description" content="Ranked &amp; annotated"></head><body><ul>${items}</ul>${pager}</body></html>`;
+      if (url.pathname === '/mann/list/michael-mann-ranked/') {
+        return new Response(page('Michael Mann, Ranked', poster('heat', 'Heat (1995)', 0) + poster('thief', 'Thief (1981)', 1), '<div class="paginate-pages"><li class="paginate-page"><a href="/mann/list/michael-mann-ranked/page/2/">2</a></li></div>'), { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      if (url.pathname === '/mann/list/michael-mann-ranked/page/2/') {
+        return new Response(page('Michael Mann, Ranked', poster('collateral', 'Collateral (2004)', 2) + poster('heat', 'Heat (1995)', 3), ''), { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      return new Response('<html><title>Letterboxd - Not Found</title></html>', { status: 404 });
+    }
+
+    // ---- MDBList public JSON feed and list page
+    if (url.origin === 'https://mdblist.com') {
+      if (url.pathname === '/lists/someone/mann-and-more/json') {
+        return json([
+          { id: 95396, rank: 1, adult: 0, title: 'Severance', tvdbid: 371980, imdb_id: 'tt11280740', mediatype: 'show', release_year: 2022 },
+          { id: 949, rank: 2, adult: 0, title: 'Heat', imdb_id: 'tt0113277', mediatype: 'movie', release_year: 1995 },
+          { id: 7, rank: 3, adult: 0, title: 'A Person', mediatype: 'person' },
+        ]);
+      }
+      if (url.pathname === '/lists/someone/mann-and-more') {
+        return new Response('<html><head><meta property="og:title" content="Mann &amp; More, a list by Some One"></head></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      return new Response('<html><title>Page Not Found</title></html>', { status: 404, headers: { 'content-type': 'text/html' } });
+    }
+
+    // ---- Anime: id mapping, AniList GraphQL, MyAnimeList list JSON
+    if (url.href === 'https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json') {
+      return json([
+        { type: 'TV', mal_id: 100, anilist_id: 1000, simkl_id: 5000, themoviedb_id: { tv: 95396 }, tvdb_id: 371980, season: { tvdb: 1, tmdb: 1 } },
+        { type: 'TV', mal_id: 101, anilist_id: 1001, themoviedb_id: { tv: 95396 }, tvdb_id: 371980, season: { tvdb: 2, tmdb: 2 } },
+        { type: 'MOVIE', mal_id: 102, anilist_id: 1002, imdb_id: ['tt13238346'], themoviedb_id: { movie: [666277] } },
+        { type: 'TV', mal_id: 103, anilist_id: 1003 },
+      ]);
+    }
+    if (url.origin === 'https://graphql.anilist.co') {
+      const user = body?.variables?.user;
+      if (user === 'hidden') return json({ errors: [{ message: 'Private User', status: 404 }], data: { MediaListCollection: null } }, 404);
+      if (user !== 'kana') return json({ errors: [{ message: 'Not Found.', status: 404 }], data: { MediaListCollection: null } }, 404);
+      const media = (id: number, idMal: number | null, english: string | null, romaji: string, format: string, episodes: number | null, year: number) => ({
+        id, idMal, format, episodes, duration: format === 'MOVIE' ? 138 : 24, seasonYear: year, startDate: { year }, title: { english, romaji }, siteUrl: `https://anilist.co/anime/${id}`,
+      });
+      return json({
+        data: {
+          MediaListCollection: {
+            user: { name: 'Kana', siteUrl: 'https://anilist.co/user/Kana' },
+            lists: [
+              {
+                name: 'Planning',
+                status: 'PLANNING',
+                isCustomList: false,
+                entries: [
+                  { id: 1, status: 'PLANNING', notes: null, createdAt: 1_700_000_000, media: media(1001, 101, 'Severance Season 2', 'Severance 2', 'TV', 10, 2025) },
+                  { id: 2, status: 'PLANNING', notes: 'cinema', createdAt: 1_700_000_100, media: media(1002, 102, 'Past Lives', 'Past Lives', 'MOVIE', 1, 2023) },
+                  { id: 3, status: 'PLANNING', notes: null, createdAt: 1_700_000_200, media: media(1009, null, null, 'Shiranai Anime', 'TV', 12, 2024) },
+                  { id: 4, status: 'PLANNING', notes: null, createdAt: 1_700_000_300, media: media(1010, null, null, 'Some Song', 'MUSIC', 1, 2024) },
+                ],
+              },
+              { name: 'Completed', status: 'COMPLETED', isCustomList: false, entries: [{ id: 5, status: 'COMPLETED', media: media(1000, 100, 'Severance', 'Severance', 'TV', 9, 2022) }] },
+            ],
+          },
+        },
+      });
+    }
+    if (url.origin === 'https://myanimelist.net') {
+      const m = url.pathname.match(/^\/animelist\/([^/]+)\/load\.json$/);
+      if (!m || m[1] !== 'kana') return new Response('{"errors":[{"message":"invalid request"}]}', { status: 400 });
+      if (Number(url.searchParams.get('offset') ?? 0) > 0) return json([]);
+      return json([
+        { status: 6, anime_id: 100, anime_title: 'Severance', anime_title_eng: 'Severance', anime_num_episodes: 9, anime_media_type_string: 'TV', anime_start_date_string: '02-18-22', notes: '', created_at: 1_700_000_000 },
+        { status: 6, anime_id: 101, anime_title: 'Severance 2', anime_title_eng: '', anime_num_episodes: 10, anime_media_type_string: 'TV', anime_start_date_string: '01-17-25', notes: '', created_at: 1_700_000_100 },
+      ]);
     }
 
     if (url.hostname === 'image.tmdb.org') {

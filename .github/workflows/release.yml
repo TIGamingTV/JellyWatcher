@@ -131,7 +131,7 @@ jobs:
 
           Platforms: \`linux/amd64\`, \`linux/arm64\` · Digest: \`${DIGEST}\`
 
-          See the [README](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md#setup) for setup instructions.
+          See the [README](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md#install) for setup instructions.
           EOF
           )
 

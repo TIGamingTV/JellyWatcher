@@ -19,7 +19,7 @@ export interface TitleRow {
   runtime: number | null;
   episode_count: number | null;
   season_count: number | null;
-  /** JSON [{ season, episodes }] for regular seasons. */
+  /** JSON [{ season, episodes, airDate }] for regular seasons (airDate since 0.4.0). */
   seasons: string | null;
   metadata_source: string | null;
   metadata_updated_at: string | null;
@@ -125,7 +125,9 @@ export class TitleService {
           meta.runtime,
           meta.episodeCount ?? null,
           meta.seasonCount ?? null,
-          meta.seasons ? JSON.stringify(meta.seasons.filter((x) => x.seasonNumber > 0).map((x) => ({ season: x.seasonNumber, episodes: x.episodeCount }))) : null,
+          meta.seasons
+            ? JSON.stringify(meta.seasons.filter((x) => x.seasonNumber > 0).map((x) => ({ season: x.seasonNumber, episodes: x.episodeCount, airDate: x.airDate ?? null })))
+            : null,
           source,
           nowIso(),
           nowIso(),

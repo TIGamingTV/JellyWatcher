@@ -55,6 +55,15 @@ export function episodeCode(season: number | null, episode: number | null): stri
   return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
 }
 
+/** What a source's season name adds beyond "<show> Season N", e.g. "Part 2"; null when nothing. */
+export function seasonName(name: string | null, show: string, season: number | null): string | null {
+  if (!name) return null;
+  let rest = name.trim();
+  if (rest.toLowerCase().startsWith(show.toLowerCase())) rest = rest.slice(show.length);
+  rest = rest.replace(new RegExp(`^[\\s:–-]*(season\\s*${season ?? ''}|s${season ?? ''})\\b`, 'i'), '').replace(/^[\s:–-]+/, '').trim();
+  return rest || null;
+}
+
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
 }
@@ -73,6 +82,10 @@ export const PROVIDER_NAME: Record<string, string> = {
   jellyfin: 'Jellyfin',
   seerr: 'Seerr',
   tmdb: 'TMDb',
+  myanimelist: 'MyAnimeList',
+  anilist: 'AniList',
+  simkl: 'Simkl',
+  mdblist: 'MDBList',
   local: 'JellyWatcher',
 };
 
@@ -85,6 +98,14 @@ export const LIST_KIND_LABEL: Record<string, string> = {
   diary: 'Diary (RSS)',
   local: 'Your list',
 };
+
+/** Greeting for the hour of the day on this device. Around midday it is simply "Good Day". */
+export function greeting(hour: number = new Date().getHours()): string {
+  if (hour >= 5 && hour < 11) return 'Good Morning';
+  if (hour >= 11 && hour < 14) return 'Good Day';
+  if (hour >= 14 && hour < 18) return 'Good Afternoon';
+  return 'Good Evening';
+}
 
 /** Today's date as YYYY-MM-DD in local time, for date inputs. */
 export function todayInput(): string {

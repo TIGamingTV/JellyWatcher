@@ -5,7 +5,7 @@ import { lifecycleStage, type AvailabilityState, type LifecycleStage } from '../
 import { card, cardRows, userCtx, type Card, type CardRow } from './cards.js';
 import { ITEM_ORDER, type ListRow } from './lists.js';
 import type { TitleStatus } from './status.js';
-import { loadManualMarks, manualDateFor, manualEpisodeKeys, seasonSizes, type ManualMarks } from './watched.js';
+import { loadManualMarks, loadSkips, manualDateFor, manualEpisodeKeys, seasonSizes, skipCovers, type ManualMarks, type SkipMarks } from './watched.js';
 
 /**
  * Ordered view of a list: every entry in list order (movies, whole shows, single seasons, single
@@ -46,6 +46,8 @@ export interface TimelineEntry {
   manualAt: string | null;
   /** When it was watched, if known. */
   watchedAt: string | null;
+  /** The person marked it "Not Watching" (and has not watched it): Up Next passes over it. */
+  skipped: boolean;
 }
 
 export interface TimelineSummary {
@@ -58,6 +60,8 @@ export interface TimelineSummary {
   watchedMinutes: number;
   remainingMinutes: number;
   watchedEntries: number;
+  /** Entries marked "Not Watching"; their watch time is left out of the totals. */
+  skippedEntries: number;
   /** Entries without a known runtime (not counted in the totals). */
   unknownRuntime: number;
   unmatched: number;
@@ -129,6 +133,7 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
 
   const tvIds = titleIds.filter((id) => rows.get(id)?.media_type === 'tv');
   const marks = loadManualMarks(ctx.db, user.id, titleIds);
+  const skips = loadSkips(ctx.db, user.id, titleIds);
   const watched = new Map<number, Set<string>>();
   for (const r of inChunks(tvIds, (c, ph) =>
     ctx.db.prepare(`SELECT title_id, season, episode FROM watched_episodes WHERE user_id = ? AND title_id IN (${ph})`).all(user.id, ...c) as { title_id: number; season: number; episode: number }[],
@@ -166,6 +171,7 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
         watched: (i.title_id !== null && watched.get(i.title_id)) || new Set<string>(),
         present: i.title_id !== null ? present.get(i.title_id) : undefined,
         marks: i.title_id !== null ? marks.get(i.title_id) : undefined,
+        skips: i.title_id !== null ? skips.get(i.title_id) : undefined,
       }),
     );
     out.set(listId, { entries, summary: summarize(entries), nextIndex: nextIndex(entries) });
@@ -183,9 +189,18 @@ interface EntryContext {
   present: Map<string, number | null> | undefined;
   /** The person's own watch marks for this title. */
   marks: ManualMarks | undefined;
+  /** What of this title the person is not watching. */
+  skips: SkipMarks | undefined;
 }
 
 function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry {
+  const e = baseEntryFor(i, position, c);
+  // Watched wins over "Not Watching".
+  const skipped = e.matched && e.state !== 'watched' && skipCovers(c.skips, i.season_number, i.season_number !== null ? i.episode_number : null);
+  return { ...e, skipped };
+}
+
+function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<TimelineEntry, 'skipped'> {
   const matched = i.match_status === 'matched' && Boolean(c.row);
   const mediaType = c.row?.media_type ?? i.media_type;
   const kind: EntryKind = i.season_number !== null ? (i.episode_number !== null ? 'episode' : 'season') : mediaType === 'tv' ? 'show' : 'movie';
@@ -267,7 +282,9 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
   } else if (kind === 'season') {
     const n = i.season_number!;
     const inSeason = regularPresent.filter(([k]) => k.startsWith(`${n}:`));
-    episodes = seasonSizes.find((x) => x.season === n)?.episodes ?? i.source_episodes ?? (inSeason.length || null);
+    // A source may list part of a season (anime split into cours), so the smaller count wins.
+    const known = seasonSizes.find((x) => x.season === n)?.episodes ?? null;
+    episodes = known !== null && i.source_episodes !== null ? Math.min(known, i.source_episodes) : (known ?? i.source_episodes ?? (inSeason.length || null));
     watchedEps = (showWatched || base.manualAt) && episodes !== null ? episodes : [...c.watched].filter((k) => k.startsWith(`${n}:`)).length;
     runtime = episodes !== null && perEpisode !== null ? episodes * perEpisode : null;
     if (c.present) availability = inSeason.length === 0 ? (s.availability.state === 'unknown' ? 'unknown' : 'not_in_library') : episodes !== null && inSeason.length >= episodes ? 'in_library' : 'partially_in_library';
@@ -313,7 +330,20 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
 }
 
 export function summarize(entries: TimelineEntry[]): TimelineSummary {
-  const sum: TimelineSummary = { entries: entries.length, films: 0, shows: 0, seasons: 0, episodes: 0, totalMinutes: 0, watchedMinutes: 0, remainingMinutes: 0, watchedEntries: 0, unknownRuntime: 0, unmatched: 0 };
+  const sum: TimelineSummary = {
+    entries: entries.length,
+    films: 0,
+    shows: 0,
+    seasons: 0,
+    episodes: 0,
+    totalMinutes: 0,
+    watchedMinutes: 0,
+    remainingMinutes: 0,
+    watchedEntries: 0,
+    skippedEntries: 0,
+    unknownRuntime: 0,
+    unmatched: 0,
+  };
   for (const e of entries) {
     if (e.kind === 'movie') sum.films++;
     else {
@@ -323,7 +353,10 @@ export function summarize(entries: TimelineEntry[]): TimelineSummary {
       } else if (e.kind === 'season') sum.seasons++;
       sum.episodes += e.episodes ?? 0;
     }
-    if (e.runtime === null) sum.unknownRuntime++;
+    if (e.skipped) {
+      // Not going to be watched: counted, but its time is not part of the list's watch time.
+      sum.skippedEntries++;
+    } else if (e.runtime === null) sum.unknownRuntime++;
     else {
       sum.totalMinutes += e.runtime;
       sum.watchedMinutes += e.watchedMinutes;
@@ -335,7 +368,62 @@ export function summarize(entries: TimelineEntry[]): TimelineSummary {
   return sum;
 }
 
+export type AutoOrder = 'release' | 'release_desc' | 'title' | 'runtime';
+
+/**
+ * When an entry came out: the movie's or show's release date, the season's air date for season and
+ * episode entries, or the year the source reported for unmatched entries. Null when unknown.
+ */
+export function entryReleaseDates(ctx: AppContext, entries: TimelineEntry[]): Map<number, string | null> {
+  const ids = [...new Set(entries.map((e) => e.title?.id).filter((x): x is number => typeof x === 'number'))];
+  const rows = new Map(
+    inChunks(ids, (c, ph) =>
+      ctx.db.prepare(`SELECT id, release_date, year, seasons FROM titles WHERE id IN (${ph})`).all(...c) as { id: number; release_date: string | null; year: number | null; seasons: string | null }[],
+    ).map((r) => [r.id, r]),
+  );
+  const out = new Map<number, string | null>();
+  for (const e of entries) {
+    const r = e.title ? rows.get(e.title.id) : undefined;
+    let d: string | null = null;
+    if (r) {
+      if (e.season !== null && e.season > 0) {
+        const s = parseJson<{ season: number; airDate?: string | null }[]>(r.seasons, []).find((x) => x.season === e.season);
+        d = s?.airDate ?? null;
+      }
+      d ??= r.release_date || (r.year ? `${r.year}-01-01` : null);
+    }
+    d ??= e.year ? `${e.year}-07-01` : null;
+    out.set(e.itemId, d && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : null);
+  }
+  return out;
+}
+
+/**
+ * Sorts a list's entries automatically, e.g. into release order for lists without an order of
+ * their own. Entries without the sort value keep their relative order at the end. Parts of one
+ * show stay in season and episode order when they share a date.
+ */
+export function autoOrder(entries: TimelineEntry[], by: AutoOrder, dates: Map<number, string | null>): number[] {
+  const name = (e: TimelineEntry) => (e.title?.title ?? e.sourceTitle).toLocaleLowerCase();
+  const parts = (a: TimelineEntry, b: TimelineEntry) => (a.season ?? -1) - (b.season ?? -1) || (a.episode ?? -1) - (b.episode ?? -1);
+  const nullsLast = <T>(a: T | null, b: T | null, cmp: (x: T, y: T) => number) => (a === null ? (b === null ? 0 : 1) : b === null ? -1 : cmp(a, b));
+  const sorted = [...entries].sort((a, b) => {
+    let r = 0;
+    if (by === 'release' || by === 'release_desc') {
+      const dir = by === 'release' ? 1 : -1;
+      r = nullsLast(dates.get(a.itemId) ?? null, dates.get(b.itemId) ?? null, (x, y) => (x < y ? -dir : x > y ? dir : 0));
+      if (r === 0 && a.title?.id === b.title?.id) r = parts(a, b);
+    } else if (by === 'title') {
+      r = name(a).localeCompare(name(b)) || parts(a, b);
+    } else {
+      r = nullsLast(a.runtime, b.runtime, (x, y) => x - y);
+    }
+    return r || a.position - b.position;
+  });
+  return sorted.map((e) => e.itemId);
+}
+
 function nextIndex(entries: TimelineEntry[]): number | null {
-  const i = entries.findIndex((e) => e.matched && e.state !== 'watched');
+  const i = entries.findIndex((e) => e.matched && e.state !== 'watched' && !e.skipped);
   return i < 0 ? null : i;
 }
