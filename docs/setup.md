@@ -4,7 +4,7 @@
 
 Requirements: Docker with Compose v2.24 or newer (`env_file.required`), and about 150 MB of disk space
 plus the image cache. Images are published to `ghcr.io/tigamingtv/jellywatcher` for `linux/amd64` and
-`linux/arm64`. Tags: `latest`, an exact version (`0.7.0`) and a minor line (`0.7`).
+`linux/arm64`. Tags: `latest`, an exact version (`0.8.0`) and a minor line (`0.8`).
 
 ```bash
 mkdir -p jellywatcher/data && cd jellywatcher
