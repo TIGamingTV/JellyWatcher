@@ -1,6 +1,6 @@
 {
   "name": "jellywatcher",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Self-hosted watchlist aggregator and media request hub for Jellyfin and Seerr",
   "license": "GPL-3.0-or-later",
