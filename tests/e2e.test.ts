@@ -596,6 +596,13 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     mocks.state.seerrCalls.length = 0;
     expect((await plugin('GET', `/api/titles/${thief}/eligibility`, h(ALICE_JF))).status).toBe(200);
     expect(mocks.state.seerrCalls.filter((c) => c.path.startsWith('/movie/')).map((c) => c.apiUser)).toEqual(['1']);
+    // Expanding a show on the Watchlists page: the episode guide with the person's own state.
+    const sevId = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 95396').get() as { id: number }).id;
+    const guide = await plugin('GET', `/api/titles/${sevId}/episodes`, h(ALICE_JF));
+    expect(guide.status).toBe(200);
+    expect(guide.data.seasons[0]).toMatchObject({ season: 1, watched: 9 });
+    expect((await plugin('GET', `/api/titles/${sevId}`, h(ALICE_JF))).status).toBe(403);
+    ctx.db.prepare('UPDATE titles SET episodes_fetched_at = NULL').run();
     // One Seerr user, one account: linking it to the local "bob" too is refused.
     const localBob = (await admin.get('/api/admin/users')).data.users.find((x: any) => x.username === 'bob');
     const taken = await admin.patch(`/api/admin/users/${localBob.id}`, { seerrUserId: 2 });
@@ -714,13 +721,61 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
 
     // A season skip covers that season's episode entries; unskipping the episode takes it back.
     const sev = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 95396').get() as { id: number }).id;
+    expect((await timeline()).entries[3]).toMatchObject({ kind: 'show', state: 'in_progress', skippedEpisodes: 0, percent: 47 });
     await admin.put(`/api/titles/${sev}/skipped`, { skipped: true, season: 2 });
-    expect((await timeline()).entries[3].skipped).toBe(false); // the whole show is not skipped
+    // The whole show is not skipped, but its skipped season no longer counts: season 1 is all that is left.
+    const sevSkipped = (await timeline()).entries[3];
+    expect(sevSkipped).toMatchObject({ skipped: false, state: 'watched', episodes: 19, skippedEpisodes: 10, percent: 100 });
+    // Taking back one episode keeps the rest of the season skipped.
     await admin.put(`/api/titles/${sev}/skipped`, { skipped: false, season: 2, episode: 4 });
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM skipped_entries WHERE title_id = ? AND episode > 0').get(sev)).toEqual({ n: 9 });
+    expect((await timeline()).entries[3]).toMatchObject({ state: 'in_progress', skippedEpisodes: 9, percent: 90 });
+    await admin.put(`/api/titles/${sev}/skipped`, { skipped: false, season: 2 });
     expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM skipped_entries WHERE title_id = ?').get(sev)).toEqual({ n: 0 });
 
     await admin.put(`/api/titles/${thief}/skipped`, { skipped: false });
     expect((await timeline()).nextIndex).toBe(2);
+  });
+
+  it('lists the episodes of a show by season, with watched and "Not Watching" state', async () => {
+    const sev = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 95396').get() as { id: number }).id;
+    const heat = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 949').get() as { id: number }).id;
+    mocks.state.seerrCalls.length = 0;
+    const r = await admin.get(`/api/titles/${sev}/episodes`);
+    expect(r.status).toBe(200);
+    expect(r.data).toMatchObject({ titleId: sev, source: 'seerr', skipped: false });
+    expect(r.data.seasons.map((s: any) => [s.season, s.year, s.episodes, s.watched, s.skipped])).toEqual([
+      [1, 2022, 9, 9, 0],
+      [2, 2025, 10, 0, 0],
+      [0, 2022, 1, 0, 0],
+    ]);
+    // Seerr has no runtimes: the episode's own length in Jellyfin fills in.
+    expect(r.data.seasons[1].list[0]).toMatchObject({ episode: 1, name: 'Hello, Ms. Cobel', airDate: '2025-01-17', aired: true, runtime: 50, watched: false, skipped: false, inLibrary: true });
+    expect(r.data.seasons[1].list[0].jellyfinItemId).toMatch(/^e201/);
+    expect(r.data.seasons[0].list[0]).toMatchObject({ watched: true, source: 'jellyfin' });
+    expect(r.data.seasons[1].runtime).toBe(500);
+    expect(r.data.seasons[2].list[0]).toMatchObject({ name: 'Inside Lumon', inLibrary: false, aired: true });
+    expect(mocks.state.seerrCalls.filter((c) => c.path.includes('/season/')).map((c) => c.path).sort()).toEqual(['/tv/95396/season/0', '/tv/95396/season/1', '/tv/95396/season/2']);
+
+    // Kept for a week: opening it again does not ask Seerr.
+    mocks.state.seerrCalls.length = 0;
+    await admin.put(`/api/titles/${sev}/skipped`, { skipped: true, season: 2, episode: 3 });
+    const g = (await admin.get(`/api/titles/${sev}/episodes`)).data;
+    expect(mocks.state.seerrCalls.filter((c) => c.path.includes('/season/'))).toEqual([]);
+    expect(g.seasons[1]).toMatchObject({ skipped: 1, runtime: 450, seasonSkipped: false });
+    expect(g.seasons[1].list[2].skipped).toBe(true);
+    await admin.put(`/api/titles/${sev}/skipped`, { skipped: true, season: 2 });
+    expect((await admin.get(`/api/titles/${sev}/episodes`)).data.seasons[1]).toMatchObject({ skipped: 10, seasonSkipped: true, runtime: null });
+    await admin.put(`/api/titles/${sev}/skipped`, { skipped: false, season: 2 });
+
+    // A watched episode is never skipped, and the guide follows marks.
+    await admin.put(`/api/titles/${sev}/watched`, { watched: true, season: 2, episode: 1 });
+    expect((await admin.get(`/api/titles/${sev}/episodes`)).data.seasons[1]).toMatchObject({ watched: 1, skipped: 0 });
+    await admin.put(`/api/titles/${sev}/watched`, { watched: false, season: 2, episode: 1 });
+
+    expect((await admin.get(`/api/titles/${heat}/episodes`)).status).toBe(400);
+    expect((await admin.get('/api/titles/999999/episodes')).status).toBe(404);
+    expect((await new Client(app).get(`/api/titles/${sev}/episodes`)).status).toBe(401);
   });
 
   it('sorts a list automatically by release date or title, saved as the personal order', async () => {
@@ -878,6 +933,17 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     expect(removed.data.list.itemCount).toBe(5);
     expect((await admin.post(`/api/lists/${imdbListId}/items`, { tmdbId: 666277, mediaType: 'movie', title: 'Past Lives' })).status).toBe(400);
     expect((await admin.del(`/api/lists/${imdbListId}/items/${entries[1].itemId}`)).status).toBe(400);
+
+    // A show's specials go right after the show.
+    const show = (await admin.get(`/api/lists/${localId}/timeline`)).data.entries.find((e: any) => e.kind === 'show');
+    const specials = await admin.post(`/api/lists/${localId}/items`, { tmdbId: 95396, mediaType: 'tv', title: 'Severance', season: 0, afterItemId: show.itemId });
+    expect(specials.status).toBe(200);
+    const withSpecials = (await admin.get(`/api/lists/${localId}/timeline`)).data.entries;
+    const at = withSpecials.findIndex((e: any) => e.itemId === show.itemId);
+    expect(withSpecials[at]).toMatchObject({ kind: 'show' });
+    expect(withSpecials[at + 1]).toMatchObject({ kind: 'season', season: 0, episodes: 1, itemId: specials.data.itemId });
+    expect((await admin.post(`/api/lists/${localId}/items`, { tmdbId: 95396, mediaType: 'tv', title: 'Severance', season: 0 })).status).toBe(409);
+    expect((await admin.post(`/api/lists/${imdbListId}/items`, { tmdbId: 95396, mediaType: 'tv', title: 'Severance', season: 0, afterItemId: show.itemId })).status).toBe(400);
 
     const empty = await admin.post('/api/lists/local', { name: 'Weekend' });
     expect(empty.data.list).toMatchObject({ provider: 'local', itemCount: 0, editable: true });

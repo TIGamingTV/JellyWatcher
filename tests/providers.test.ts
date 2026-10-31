@@ -7,6 +7,7 @@ import { isTimeline } from '../server/services/lists';
 import { mediaBrowserHeader, normalizeItem, normalizeUserData } from '../server/providers/jellyfin';
 import { encodeSeerrQuery, seerrCan } from '../server/providers/seerr';
 import { HttpClient, normalizeServiceUrl, parseRetryAfter } from '../server/http/client';
+import { TmdbClient } from '../server/providers/tmdb';
 import { ProviderError } from '../server/http/errors';
 
 describe('Trakt', () => {
@@ -266,6 +267,33 @@ describe('Seerr', () => {
     expect(seerrCan(32, 'tv')).toEqual({ request: true, autoApprove: false });
     expect(seerrCan(262144 | 256, 'movie')).toEqual({ request: true, autoApprove: true });
     expect(seerrCan(262144, 'tv')).toEqual({ request: false, autoApprove: false });
+  });
+});
+
+describe('TMDb', () => {
+  it('reads the episodes of many seasons with 20 appended per request', async () => {
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      urls.push(url);
+      const appended = new URL(url).searchParams.get('append_to_response')!.split(',');
+      const body: Record<string, unknown> = { id: 1 };
+      for (const a of appended) {
+        const n = Number(a.split('/')[1]);
+        // No specials: TMDb leaves the key out.
+        if (n > 0) body[a] = { episodes: [{ episode_number: 1, name: `S${n}E1`, air_date: '2020-01-01', runtime: 42 }, { episode_number: 2, name: '', air_date: '', runtime: 0 }] };
+      }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const seasons = Array.from({ length: 25 }, (_, i) => i);
+    const out = await new TmdbClient('token', fetchImpl).seasonEpisodes(42, seasons);
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain('/3/tv/42?append_to_response=season%2F0%2Cseason%2F1');
+    expect(out.has(0)).toBe(false);
+    expect(out.size).toBe(24);
+    expect(out.get(24)).toEqual([
+      { episode: 1, name: 'S24E1', airDate: '2020-01-01', runtime: 42 },
+      { episode: 2, name: null, airDate: null, runtime: null },
+    ]);
   });
 });
 

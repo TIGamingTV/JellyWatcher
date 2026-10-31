@@ -362,6 +362,15 @@ export class ListService {
     return ids.length;
   }
 
+  /** Moves an entry to just after another one, keeping the rest of the effective order. */
+  placeAfter(listId: number, itemId: number, afterItemId: number): void {
+    const ids = (this.db.prepare(`SELECT id FROM list_items WHERE list_id = ? ORDER BY ${ITEM_ORDER}`).all(listId) as { id: number }[]).map((r) => r.id).filter((id) => id !== itemId);
+    const at = ids.indexOf(afterItemId);
+    if (at < 0) return;
+    ids.splice(at + 1, 0, itemId);
+    this.setOrder(listId, ids);
+  }
+
   resetOrder(listId: number): void {
     this.db.prepare('UPDATE list_items SET custom_position = NULL WHERE list_id = ?').run(listId);
   }

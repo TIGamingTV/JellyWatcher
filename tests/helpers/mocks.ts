@@ -241,6 +241,17 @@ export function createMocks() {
         const q = (url.searchParams.get('query') ?? '').toLowerCase();
         return json({ page: 1, totalPages: 1, results: searchHits[q] ?? [] });
       }
+      // Season details: names and air dates, no runtime. Seerr answers 500 for a missing season.
+      const seasonMatch = p.match(/^\/tv\/(\d+)\/season\/(\d+)$/);
+      if (seasonMatch) {
+        const n = Number(seasonMatch[2]);
+        if (seasonMatch[1] !== '95396' || n > 2) return json({ message: 'Unable to retrieve season.' }, 500);
+        const episodes =
+          n === 0
+            ? [{ episodeNumber: 1, name: 'Inside Lumon', airDate: '2022-04-08' }]
+            : Array.from({ length: n === 1 ? 9 : 10 }, (_, i) => ({ episodeNumber: i + 1, name: n === 2 && i === 0 ? 'Hello, Ms. Cobel' : `Chapter ${n}.${i + 1}`, airDate: n === 1 ? `2022-02-${String(18 + i).padStart(2, '0')}` : `2025-01-${String(17 + i).padStart(2, '0')}` }));
+        return json({ id: 1000 + n, seasonNumber: n, name: n === 0 ? 'Specials' : `Season ${n}`, episodes: episodes.map((e) => ({ ...e, seasonNumber: n, showId: 95396 })) });
+      }
       const det = p.match(/^\/(movie|tv)\/(\d+)$/);
       if (det) {
         const d = seerrDetails(det[1]!, Number(det[2]));

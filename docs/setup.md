@@ -149,7 +149,13 @@ without parts after it still stands for the whole show.
   shortest first. The result is saved as your order, so you can still adjust it by hand.
 - The **circle** on an entry marks it watched (with a date). The **skip** button next to it marks it
   *Not Watching*: Up Next passes over it and its time no longer counts as left to watch. Tap it again
-  to put the entry back.
+  to put the entry back. The progress line runs on through skipped entries up to Up Next.
+- **Click a show or season** to unfold its episodes, grouped by season (each season folds open on its
+  own; the one with your next episode opens first). Every episode shows its number, title, year and
+  runtime, with a Watched and a Skip button. Skipped episodes no longer count toward the show's
+  progress or watch time. Episode names and air dates come from TMDb or Seerr and are refreshed
+  weekly. **Specials** are listed in a folded section at the end; on your own lists, *Add Specials
+  to This List* puts them right after the show.
 
 Home shows **Up Next**: the next entry of every list that is neither watched nor skipped, with
 Watch / Request, Watched and Skip.

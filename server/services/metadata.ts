@@ -1,6 +1,6 @@
 import type { MatchCandidate, MediaType } from '../domain/matching.js';
 import type { SeerrClient, SeerrDetails } from '../providers/seerr.js';
-import { showTotals, type DiscoverKind, type TitleMetadata, type TmdbClient } from '../providers/tmdb.js';
+import { showTotals, type DiscoverKind, type SeasonEpisodes, type TitleMetadata, type TmdbClient } from '../providers/tmdb.js';
 import type { IntegrationStore } from './integrations.js';
 
 /**
@@ -15,6 +15,8 @@ export interface MetadataSource {
   searchAny(query: string, page: number): Promise<{ results: MatchCandidate[]; totalPages: number }>;
   discover(kind: DiscoverKind, page: number): Promise<{ results: MatchCandidate[]; totalPages: number }>;
   details(mediaType: MediaType, tmdbId: number): Promise<TitleMetadata | null>;
+  /** Episodes (name, air date, runtime when known) of the given seasons of a show. */
+  seasonEpisodes(tmdbId: number, seasons: number[]): Promise<SeasonEpisodes>;
 }
 
 class TmdbSource implements MetadataSource {
@@ -39,6 +41,9 @@ class TmdbSource implements MetadataSource {
   }
   details(t: MediaType, id: number) {
     return this.c.details(t, id);
+  }
+  seasonEpisodes(id: number, seasons: number[]) {
+    return this.c.seasonEpisodes(id, seasons);
   }
 }
 
@@ -91,6 +96,19 @@ class SeerrSource implements MetadataSource {
       if ((err as { kind?: string }).kind === 'not_found') return null;
       throw err;
     }
+  }
+  /** One request per season (Seerr has no batched form), two at a time. */
+  async seasonEpisodes(id: number, seasons: number[]): Promise<SeasonEpisodes> {
+    const out: SeasonEpisodes = new Map();
+    const queue = [...seasons];
+    const worker = async () => {
+      for (let n = queue.shift(); n !== undefined; n = queue.shift()) {
+        const eps = await this.c.season(id, n);
+        if (eps) out.set(n, eps.map((e) => ({ ...e, runtime: null })));
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    return out;
   }
 }
 

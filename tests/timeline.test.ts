@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { markHeaders, summarize, type TimelineEntry } from '../server/services/timeline';
-import { entryFacts, nextEntryIndex } from '../web/src/lib/timeline';
+import { entryFacts, expandable, nextEntryIndex, timelineRail } from '../web/src/lib/timeline';
+import { canAddSpecials, guideSeasons, initialSeason, seasonFacts, seasonRail, withEpisode } from '../web/src/lib/episodes';
+import type { EpisodeGuide, GuideEpisode, GuideSeason } from '../web/src/lib/types';
 import type { TimelineEntry as WebEntry } from '../web/src/lib/types';
 
 let nextId = 1;
@@ -33,6 +35,7 @@ function entry(kind: TimelineEntry['kind'], titleId: number | null, over: Partia
     jellyfinItemId: null,
     header: false,
     parts: null,
+    skippedEpisodes: kind === 'show' || kind === 'season' ? 0 : null,
     ...over,
   };
 }
@@ -90,5 +93,94 @@ describe('show entries that head their parts', () => {
     expect(watched[0]).toMatchObject({ header: true, state: 'watched', percent: 100, skipped: false });
     const skipped = markHeaders([entry('show', 1), entry('episode', 1, { skipped: true })]);
     expect(skipped[0]).toMatchObject({ header: true, skipped: true });
+  });
+
+  it('keeps a show whole when only its specials follow it', () => {
+    nextId = 1;
+    const out = markHeaders([entry('show', 1), entry('season', 1, { season: 0 }), entry('episode', 1, { season: 0 })]);
+    expect(out[0]).toMatchObject({ header: false, runtime: 500 });
+  });
+});
+
+describe('skipped episodes', () => {
+  it('lists them with the facts of a show or season', () => {
+    nextId = 1;
+    expect(entryFacts(entry('show', 1, { skippedEpisodes: 3 }) as unknown as WebEntry)).toEqual(['Show', '2 seasons', '10 episodes', '3 skipped', '8 h 20 min']);
+    expect(entryFacts(entry('season', 1) as unknown as WebEntry)).toEqual(['10 episodes', '50 min']);
+  });
+});
+
+describe('the progress rail', () => {
+  it('runs through watched entries and through skipped ones before Up Next only', () => {
+    nextId = 1;
+    const list = [
+      entry('movie', 1, { state: 'watched' }),
+      entry('movie', 2, { skipped: true }),
+      entry('movie', 3),
+      entry('movie', 4, { skipped: true }),
+      entry('movie', 5, { state: 'watched' }),
+    ] as unknown as WebEntry[];
+    const next = nextEntryIndex(list);
+    expect(next).toBe(2);
+    expect(timelineRail(list, next)).toEqual([true, true, false, false, true]);
+    // Nothing left to watch: every skip is part of the finished rail.
+    expect(timelineRail(list, -1)).toEqual([true, true, false, true, true]);
+  });
+
+  it('expands matched shows and seasons, not headers, episodes or movies', () => {
+    nextId = 1;
+    const tv = (kind: TimelineEntry['kind'], over: Partial<TimelineEntry> = {}) => entry(kind, 1, { title: { id: 1, title: 'S', mediaType: 'tv', tmdbId: 9 } as TimelineEntry['title'], ...over }) as unknown as WebEntry;
+    expect([tv('show'), tv('season'), tv('episode'), tv('show', { header: true }), tv('show', { matched: false }), entry('movie', 2) as unknown as WebEntry].map(expandable)).toEqual([true, true, false, false, false, false]);
+  });
+});
+
+describe('episode guide', () => {
+  const ep = (n: number, over: Partial<GuideEpisode> = {}): GuideEpisode => ({ episode: n, name: `E${n}`, airDate: '2020-01-01', aired: true, runtime: 30, watched: false, source: null, watchedAt: null, skipped: false, inLibrary: true, jellyfinItemId: null, ...over });
+  const season = (n: number, list: GuideEpisode[], over: Partial<GuideSeason> = {}): GuideSeason => ({
+    season: n,
+    year: 2020,
+    episodes: list.length,
+    watched: list.filter((e) => e.watched).length,
+    skipped: list.filter((e) => e.skipped).length,
+    seasonSkipped: false,
+    runtime: 30 * list.filter((e) => !e.skipped).length,
+    watchedMinutes: 0,
+    manualAt: null,
+    list,
+    ...over,
+  });
+  const guide: EpisodeGuide = {
+    titleId: 1,
+    source: 'tmdb',
+    skipped: false,
+    seasons: [season(1, [ep(1, { watched: true }), ep(2, { watched: true })]), season(2, [ep(1, { watched: true }), ep(2, { skipped: true }), ep(3), ep(4, { aired: false })]), season(0, [ep(1)])],
+  };
+
+  it('splits regular seasons from specials and opens the season with the next episode', () => {
+    nextId = 1;
+    const show = entry('show', 1) as unknown as WebEntry;
+    const { regular, specials } = guideSeasons(guide, show);
+    expect(regular.map((s) => s.season)).toEqual([1, 2]);
+    expect(specials?.season).toBe(0);
+    expect(initialSeason(regular)).toBe(2);
+    expect(guideSeasons(guide, entry('season', 1, { season: 2 }) as unknown as WebEntry)).toMatchObject({ regular: [{ season: 2 }], specials: null });
+    expect(seasonRail(regular[1]!)).toEqual([true, true, false, false]);
+    expect(seasonFacts(regular[1]!)).toEqual(['1 of 3 episodes watched', '1 skipped', '2020', '1 h 30 min']);
+  });
+
+  it('recounts a season when an episode changes', () => {
+    const g = withEpisode(guide, 2, 3, { watched: true, source: 'manual' });
+    expect(g.seasons[1]).toMatchObject({ watched: 2, skipped: 1, runtime: 90, watchedMinutes: 60 });
+    const back = withEpisode(guide, 2, 2, { skipped: false });
+    expect(back.seasons[1]).toMatchObject({ skipped: 0, runtime: 120 });
+  });
+
+  it('offers to add specials once, on local lists only', () => {
+    nextId = 1;
+    const show = entry('show', 1, { title: { id: 1, title: 'S', mediaType: 'tv', tmdbId: 9 } as TimelineEntry['title'] }) as unknown as WebEntry;
+    expect(canAddSpecials(show, [show], true)).toBe(true);
+    expect(canAddSpecials(show, [show], false)).toBe(false);
+    const specials = entry('season', 1, { season: 0 }) as unknown as WebEntry;
+    expect(canAddSpecials(show, [show, specials], true)).toBe(false);
   });
 });

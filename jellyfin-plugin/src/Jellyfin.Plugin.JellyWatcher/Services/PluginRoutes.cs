@@ -19,6 +19,7 @@ public static class PluginRoutes
         ("PUT", Make("^lists/[0-9]{1,12}/mirror$")),
         ("POST", Make("^lists/(link|local|trakt)$")),
         ("GET", Make("^titles/[0-9]{1,12}/eligibility$")),
+        ("GET", Make("^titles/[0-9]{1,12}/episodes$")),
         ("POST", Make("^titles/[0-9]{1,12}/request$")),
         ("PUT", Make("^titles/[0-9]{1,12}/(skipped|watched)$")),
     ];

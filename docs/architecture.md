@@ -49,7 +49,11 @@ its episode count, runtime and watched share, plus list totals. A show entry fol
 seasons or episodes of the same show becomes a *header* (`header: true`): it has no size or watch time,
 is never Up Next, and is left out of Jellyfin mirrors. Runtimes come from metadata, then the
 source, then Jellyfin. It feeds timeline views and Home's *Up Next* (the first unwatched entry of
-each list that isn't marked *Not Watching*). It also sorts lists automatically (release date, newest
+each list that isn't marked *Not Watching*). Unwatched episodes of a show or season marked *Not
+Watching* (`skippedEpisodes`) are left out of its progress and watch time. `services/episodes.ts`
+builds a show's episode guide for expanded timeline entries (`GET /titles/:id/episodes`): names, air
+dates and runtimes from TMDb (20 seasons per request) or Seerr (one request per season), kept in
+`title_episodes` for a week, combined with the person's watched and skipped state. It also sorts lists automatically (release date, newest
 first, title, runtime); the result is saved as the person's order.
 
 Adding a source means writing an adapter that produces `SourceItem[]` and registering how its lists
@@ -68,6 +72,7 @@ are fetched in `sync/lists.ts`. Matching, dedup, status and UI then work unchang
 | `jellyfin_items`, `jellyfin_user_data`, `jellyfin_episodes` | Library index, per-Jellyfin-user viewing state, and episodes of listed series. |
 | `watch_history`, `watched_episodes` | Per-person viewing state that outlives the library, so deleted titles stay watched. |
 | `manual_watches`, `skipped_entries` | The person's own watched marks (with dates) and *Not Watching* marks, per title, season or episode. |
+| `title_episodes` | Episode guide of shows (specials included): name, air date and runtime per episode, from TMDb or Seerr. |
 | `list_mirrors` | What the Jellyfin plugin last did with a list shown in Jellyfin (collection or playlist id, items, entries not in the library, error). |
 | `seerr_media`, `requests` | Mirror of Seerr media status and requests. |
 | `sync_runs`, `activity` | Job history and the Home activity feed. |
@@ -141,6 +146,6 @@ presenting old data as current.
   - Only to admin-configured service URLs (http/https, no embedded credentials) and fixed provider hosts.
   - The image proxy accepts only whitelisted sizes and file names, or Jellyfin item ids, so it is not an open proxy.
 - **Webhooks:** authenticated with a bearer token. The payload is never trusted; it only schedules a sync.
-- **Jellyfin plugin:** off until an administrator creates a plugin key. Requests with the key (`X-JW-Plugin-Key`, compared in constant time) act for the Jellyfin user named in `X-JW-Jellyfin-User`, resolved with the same rules as Jellyfin sign-in, and can only reach an allowlist of list, timeline, request, skip and watched routes; no cookie is involved, so they skip the CSRF check. See [jellyfin-plugin.md](jellyfin-plugin.md).
+- **Jellyfin plugin:** off until an administrator creates a plugin key. Requests with the key (`X-JW-Plugin-Key`, compared in constant time) act for the Jellyfin user named in `X-JW-Jellyfin-User`, resolved with the same rules as Jellyfin sign-in, and can only reach an allowlist of list, timeline, episode guide, request, skip and watched routes; no cookie is involved, so they skip the CSRF check. See [jellyfin-plugin.md](jellyfin-plugin.md).
 - **HTTP headers:** strict CSP (`default-src 'self'`), `frame-ancestors 'none'`, `nosniff`, `no-referrer`.
 - **Container:** non-root (uid 1000), read-only root filesystem, all capabilities dropped, `no-new-privileges`.

@@ -68,6 +68,9 @@ describe('plugin route allowlist', () => {
     expect(pluginRouteFor('GET', '/api/lists')?.user).toBe(true);
     expect(pluginRouteFor('GET', '/api/lists/12/timeline?x=1')).not.toBeNull();
     expect(pluginRouteFor('PUT', '/api/titles/3/skipped/')).not.toBeNull();
+    expect(pluginRouteFor('GET', '/api/titles/3/episodes')?.user).toBe(true);
+    expect(pluginRouteFor('PUT', '/api/titles/3/episodes')).toBeNull();
+    expect(pluginRouteFor('GET', '/api/titles/3')).toBeNull();
     expect(pluginRouteFor('GET', '/api/images/tmdb/w342/abc.jpg')?.user).toBe(false);
     expect(pluginRouteFor('GET', '/api/images/tmdb/w342/..%2Fetc')).toBeNull();
     expect(pluginRouteFor('PUT', '/api/lists/12/mirror')?.user).toBe(true);

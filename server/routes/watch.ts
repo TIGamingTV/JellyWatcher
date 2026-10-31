@@ -9,7 +9,8 @@ import { posterUrl, userCtx } from '../services/cards.js';
 import { LOCAL_PROVIDER } from '../services/lists.js';
 import type { TitleStatus } from '../services/status.js';
 import type { TitleRow } from '../services/titles.js';
-import { epKey, manualDateFor, parseWatchedAt, seasonSizes } from '../services/watched.js';
+import { ensureEpisodes, episodeGuide, episodeState, episodeWatched, knownEpisodes } from '../services/episodes.js';
+import { epKey, parseWatchedAt, seasonSizes } from '../services/watched.js';
 
 export interface EpisodeWatch {
   episode: number;
@@ -44,41 +45,16 @@ export function watchDetail(ctx: AppContext, u: SessionUser, t: TitleRow, status
   if (t.media_type !== 'tv') return base;
 
   const sizes = seasonSizes(t.seasons);
-  const jf = new Map(
-    (ctx.db.prepare('SELECT season, episode, played_at FROM watched_episodes WHERE user_id = ? AND title_id = ?').all(u.id, t.id) as { season: number; episode: number; played_at: string | null }[]).map(
-      (r) => [epKey(r.season, r.episode), r.played_at],
-    ),
-  );
-  const present = new Set(
-    (ctx.db.prepare('SELECT je.season, je.episode FROM jellyfin_episodes je JOIN jellyfin_items ji ON ji.id = je.series_id WHERE ji.title_id = ?').all(t.id) as { season: number; episode: number }[]).map((r) =>
-      epKey(r.season, r.episode),
-    ),
-  );
-  // A whole show reported watched by Jellyfin counts every episode, even ones never read one by one.
-  const jfAll = watched && status.viewing.source === 'Jellyfin';
-
-  const known = new Map<number, number>();
-  for (const k of [...jf.keys(), ...present, ...marks.episodes.keys()]) {
-    const [s, e] = k.split(':').map(Number) as [number, number];
-    known.set(s, Math.max(known.get(s) ?? 0, e));
-  }
-  const seasons = new Set<number>([...sizes.keys(), ...[...known.keys()].filter((s) => s > 0 || [...present].some((k) => k.startsWith(`${s}:`))), ...marks.seasons.keys()]);
+  const st = episodeState(ctx, u.id, t, status);
+  const known = knownEpisodes(st);
+  const seasons = new Set<number>([...sizes.keys(), ...[...known.keys()].filter((s) => s > 0 || [...st.present.keys()].some((k) => k.startsWith(`${s}:`))), ...marks.seasons.keys()]);
   base.seasons = [...seasons]
     .sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b))
     .map((s) => {
       const n = sizes.get(s) ?? (known.get(s) || null);
       const list: EpisodeWatch[] = [];
       for (let e = 1; e <= (n ?? 0); e++) {
-        const k = epKey(s, e);
-        const manualAt = manualDateFor(marks, s, e);
-        const fromJf = jf.has(k) || jfAll;
-        list.push({
-          episode: e,
-          watched: Boolean(manualAt) || fromJf,
-          source: manualAt ? 'manual' : fromJf ? 'jellyfin' : null,
-          watchedAt: manualAt ?? jf.get(k) ?? null,
-          inLibrary: present.has(k),
-        });
+        list.push({ episode: e, ...episodeWatched(st, s, e), inLibrary: st.present.has(epKey(s, e)) });
       }
       const seasonManual = marks.seasons.get(s) ?? marks.title;
       return { season: s, episodes: n, watched: seasonManual && !n ? 0 : list.filter((x) => x.watched).length, manualAt: seasonManual, list };
@@ -120,6 +96,18 @@ export async function watchRoutes(app: FastifyInstance, { ctx }: AppDeps) {
     } else ctx.watches.unmark(u.id, id, { season: body.season, episode: body.episode });
     const status = ctx.status.forTitles(userCtx(u), [id]).get(id)!;
     return { status, watch: watchDetail(ctx, u, ctx.titles.get(id)!, status) };
+  });
+
+  /** Episode guide of a show: seasons with each episode's name, air date, runtime and state. */
+  app.get('/titles/:id/episodes', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(IdParam, req.params);
+    const first = ctx.titles.get(id);
+    if (!first) throw new ApiError(404, 'not_found', 'Title not found.');
+    if (first.media_type !== 'tv') throw new ApiError(400, 'not_a_show', 'Only shows have episodes.');
+    const t = ctx.titles.get(await ensureEpisodes(ctx, id)) ?? ctx.titles.get(id)!;
+    const status = ctx.status.forTitles(userCtx(u), [t.id]).get(t.id)!;
+    return episodeGuide(ctx, u, t, status);
   });
 
   /** "Not Watching": skip a title, season or episode so Up Next moves on to the next entry. */

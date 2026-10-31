@@ -87,7 +87,8 @@ The database is backed up to `data/backups/` and migrated automatically on start
 - **Lists from everywhere:** paste a link and the list keeps its order and syncs on its own, or
   upload an export. Create your own lists too, or duplicate any list into an editable copy.
 - **Timelines:** every movie, show, season and episode in order, with the total watch time counting
-  down as you watch.
+  down as you watch. Click a show or season to unfold its episodes by season, each with its title,
+  year and runtime and its own Watched and Skip buttons.
 - **Your order:** drag entries around, or **Auto Sort** a list into release order (or newest first,
   title, runtime). Your order survives syncs and can be reset.
 - **Up Next:** the next entry of every list on Home, with **Watch**, **Request**, **Watched** and

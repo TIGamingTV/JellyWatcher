@@ -653,7 +653,7 @@ function ListContent({ list, onDisplay, onDiscover }: { list: ListView; onDispla
         )
       ) : (
         <div className="panel tl-panel">
-          <TimelineView timeline={timeline.data!} editing={editing} removable={list.editable} onOrder={saveOrder} onRemove={setRemoving} />
+          <TimelineView timeline={timeline.data!} listId={list.id} editing={editing} removable={list.editable} onOrder={saveOrder} onRemove={setRemoving} />
         </div>
       )}
       {sorting && <AutoSortSheet list={list} onClose={() => setSorting(false)} />}

@@ -12,6 +12,8 @@ smaller view of the parts used most:
   - **Request** asks Seerr live what can be requested, with season picking for shows.
   - **Not Watching** skips the entry (with Undo), so Up Next moves on.
   - **Watched** marks it watched (or unmarks it).
+  - Clicking a **show or season** unfolds its episodes by season, each with Play, Not Watching and
+    Watched.
 - **Show in Jellyfin** keeps a list in Jellyfin as a collection or a private playlist, in the list's
   order (see [below](#collections-and-playlists)).
 
@@ -138,7 +140,7 @@ JellyWatcher /api/...  ── key checked, account found by Jellyfin user id, ro
   Treat it like a password. **Regenerate** replaces it at once; **Turn Off** disables plugin access.
 - Requests with the key can only reach the routes the page needs: lists and timelines, adding lists
   by link, local lists or the Trakt watchlist, list sync, the Show in Jellyfin setting, request
-  eligibility and requests, Not Watching and Watched, TMDb artwork, and (plugin only, not the page)
+  eligibility and requests, a show's episodes, Not Watching and Watched, TMDb artwork, and (plugin only, not the page)
   the lists to show in Jellyfin and the plugin's report about them. Everything else, including all administration, answers 403,
   even for administrators. The plugin checks the same list before anything leaves Jellyfin.
 - The person comes only from Jellyfin's own sign-in (never from the browser), and the plugin never

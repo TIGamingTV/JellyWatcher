@@ -1,4 +1,4 @@
-import type { Eligibility, JellyfinMirrorMode, ListView, Timeline } from '../../web/src/lib/types';
+import type { Eligibility, EpisodeGuide, JellyfinMirrorMode, ListView, Timeline } from '../../web/src/lib/types';
 
 /** Calls to JellyWatcher, sent through the plugin with the person's Jellyfin session. */
 
@@ -88,6 +88,7 @@ export const api = {
   addLink: (url: string) => jw<{ list: ListView }>('POST', 'lists/link', { url }),
   addLocal: (name: string) => jw<{ list: ListView }>('POST', 'lists/local', { name }),
   addTraktWatchlist: () => jw<{ list: ListView }>('POST', 'lists/trakt', { mode: 'watchlist' }),
+  episodes: (titleId: number) => jw<EpisodeGuide>('GET', `titles/${titleId}/episodes`),
   eligibility: (titleId: number) => jw<Eligibility>('GET', `titles/${titleId}/eligibility`),
   request: (titleId: number, seasons?: number[]) => jw<{ ok: true; message: string }>('POST', `titles/${titleId}/request`, seasons ? { seasons } : {}),
   skip: (titleId: number, skipped: boolean, scope: { season?: number | null; episode?: number | null }) => jw<{ ok: true; skipped: boolean }>('PUT', `titles/${titleId}/skipped`, { skipped, ...scope }),

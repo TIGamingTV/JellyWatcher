@@ -5,6 +5,7 @@ import { lifecycleStage, type AvailabilityState, type LifecycleStage } from '../
 import { card, cardRows, userCtx, type Card, type CardRow } from './cards.js';
 import { ITEM_ORDER, type ListRow } from './lists.js';
 import type { TitleStatus } from './status.js';
+import { guideCounts } from './episodes.js';
 import { loadManualMarks, loadSkips, manualDateFor, manualEpisodeKeys, seasonSizes, skipCovers, type ManualMarks, type SkipMarks } from './watched.js';
 
 /**
@@ -58,6 +59,11 @@ export interface TimelineEntry {
   header: boolean;
   /** For headers: how many entries of the show follow it in the list; null otherwise. */
   parts: number | null;
+  /**
+   * Shows and seasons: unwatched episodes in it marked "Not Watching". They are left out of the
+   * entry's progress and watch time (`episodes` still counts them). Null for other entries.
+   */
+  skippedEpisodes: number | null;
 }
 
 export interface TimelineSummary {
@@ -174,6 +180,8 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
     episodeIds.get(r.title_id)!.set(key(r.season, r.episode), r.id);
   }
 
+  const guide = guideCounts(ctx, tvIds);
+
   const byList = new Map<number, ItemRow[]>();
   for (const i of items) byList.set(i.list_id, [...(byList.get(i.list_id) ?? []), i]);
 
@@ -190,6 +198,7 @@ export function buildTimelines(ctx: AppContext, user: SessionUser, lists: Pick<L
         marks: i.title_id !== null ? marks.get(i.title_id) : undefined,
         skips: i.title_id !== null ? skips.get(i.title_id) : undefined,
         episodeIds: i.title_id !== null ? episodeIds.get(i.title_id) : undefined,
+        guide: i.title_id !== null ? guide.get(i.title_id) : undefined,
         }),
       ),
     );
@@ -212,15 +221,19 @@ interface EntryContext {
   skips: SkipMarks | undefined;
   /** Jellyfin ids of the title's episodes in the library (season:episode → item id). */
   episodeIds: Map<string, string> | undefined;
+  /** Episodes per season in the episode guide (specials included). */
+  guide?: Map<number, number> | undefined;
 }
 
 function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry {
   const e = baseEntryFor(i, position, c);
-  // Watched wins over "Not Watching".
-  const skipped = e.matched && e.state !== 'watched' && skipCovers(c.skips, i.season_number, i.season_number !== null ? i.episode_number : null);
+  // Watched wins over "Not Watching". A show or season whose every episode is skipped is skipped.
+  const allSkipped = e.skippedEpisodes !== null && e.skippedEpisodes > 0 && e.episodes !== null && e.skippedEpisodes >= e.episodes;
+  const skipped = e.matched && e.state !== 'watched' && (allSkipped || skipCovers(c.skips, i.season_number, i.season_number !== null ? i.episode_number : null));
   let jellyfinItemId: string | null = null;
   if (e.matched && e.availability !== 'not_in_library') {
-    const episodeId = e.kind === 'episode' ? c.episodeIds?.get(key(i.season_number!, i.episode_number!)) : undefined;
+    // Multi-episode files are stored once per episode as "<id>#<n>".
+    const episodeId = e.kind === 'episode' ? c.episodeIds?.get(key(i.season_number!, i.episode_number!))?.split('#')[0] : undefined;
     jellyfinItemId = episodeId ?? c.status?.jellyfinItemId ?? null;
   }
   return { ...e, skipped, jellyfinItemId, header: false, parts: null };
@@ -230,7 +243,7 @@ function entryFor(i: ItemRow, position: number, c: EntryContext): TimelineEntry 
  * Turns whole-show entries into headers when seasons or episodes of the same show follow them in
  * the list. Such lists use the show as a section title; counting it as the whole show would double
  * the watch time and hold Up Next on it until every episode is watched. A show entry with no parts
- * after it still stands for the whole show.
+ * after it still stands for the whole show, and so does one followed only by its specials.
  */
 export function markHeaders(entries: TimelineEntry[]): TimelineEntry[] {
   const later = new Map<number, TimelineEntry[]>();
@@ -239,7 +252,8 @@ export function markHeaders(entries: TimelineEntry[]): TimelineEntry[] {
     const e = entries[i]!;
     const id = e.matched ? e.title?.id : undefined;
     if (id === undefined) continue;
-    if (e.kind === 'season' || e.kind === 'episode') later.set(id, [...(later.get(id) ?? []), e]);
+    // Specials added after a show are extras to it, not parts it heads.
+    if ((e.kind === 'season' || e.kind === 'episode') && e.season !== 0) later.set(id, [...(later.get(id) ?? []), e]);
     else if (e.kind === 'show' && later.has(id)) out[i] = asHeader(e, later.get(id)!);
   }
   return out;
@@ -263,6 +277,7 @@ function asHeader(e: TimelineEntry, parts: TimelineEntry[]): TimelineEntry {
     percent: counted.length ? Math.round((watched / counted.length) * 100) : 0,
     watchedAt: null,
     skipped: counted.length === 0,
+    skippedEpisodes: null,
   };
 }
 
@@ -299,6 +314,7 @@ function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<Timel
       availability: 'unknown',
       stage: 'unknown',
       watchedAt: null,
+      skippedEpisodes: null,
     };
   }
 
@@ -322,6 +338,7 @@ function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<Timel
       availability: s.availability.state,
       stage: s.stage,
       watchedAt: state === 'watched' ? (base.manualAt ?? s.viewing.progress?.lastPlayedAt ?? null) : null,
+      skippedEpisodes: null,
     };
   }
 
@@ -332,9 +349,27 @@ function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<Timel
   const perEpisode = t.runtime ?? i.source_runtime ?? c.jfRuntime ?? avgPresent;
   const showWatched = viewing === 'watched';
 
+  const sizeOf = (n: number) => seasonSizes.find((x) => x.season === n)?.episodes ?? c.guide?.get(n) ?? null;
+  // Unwatched episodes covered by a season or episode skip (a whole-show skip skips the entry).
+  const skippedIn = (season: number | null, limit: number | null) => {
+    const m = c.skips;
+    if (!m || m.title) return 0;
+    const covered = new Set<string>();
+    for (const n of m.seasons) {
+      if (season === null ? n === 0 : n !== season) continue;
+      const size = sizeOf(n);
+      for (let e = 1; e <= (size ?? 0); e++) covered.add(key(n, e));
+    }
+    for (const k of m.episodes) {
+      const [n, e] = k.split(':').map(Number) as [number, number];
+      if ((season === null ? n > 0 : n === season) && (limit === null || e <= limit)) covered.add(k);
+    }
+    return [...covered].filter((k) => !c.watched.has(k)).length;
+  };
   let episodes: number | null;
   let seasons: number | null = null;
   let watchedEps: number;
+  let skippedEps = 0;
   let runtime: number | null;
   let availability: AvailabilityState = s.availability.state;
 
@@ -344,15 +379,17 @@ function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<Timel
     seasons = i.source_seasons ?? t.season_count ?? (new Set(regularPresent.map(([k]) => k.split(':')[0])).size || null);
     const counted = [...c.watched].filter((k) => !k.startsWith('0:')).length;
     watchedEps = showWatched && episodes !== null ? episodes : Math.max(counted, s.viewing.progress?.playedEpisodes ?? 0);
-    runtime = episodes !== null && perEpisode !== null ? episodes * perEpisode : null;
+    if (!showWatched && !base.manualAt) skippedEps = Math.min(skippedIn(null, null), Math.max(0, (episodes ?? 0) - watchedEps));
+    runtime = episodes !== null && perEpisode !== null ? (episodes - skippedEps) * perEpisode : null;
   } else if (kind === 'season') {
     const n = i.season_number!;
-    const inSeason = regularPresent.filter(([k]) => k.startsWith(`${n}:`));
+    const inSeason = [...(c.present?.entries() ?? [])].filter(([k]) => k.startsWith(`${n}:`));
     // A source may list part of a season (anime split into cours), so the smaller count wins.
-    const known = seasonSizes.find((x) => x.season === n)?.episodes ?? null;
+    const known = sizeOf(n);
     episodes = known !== null && i.source_episodes !== null ? Math.min(known, i.source_episodes) : (known ?? i.source_episodes ?? (inSeason.length || null));
     watchedEps = (showWatched || base.manualAt) && episodes !== null ? episodes : [...c.watched].filter((k) => k.startsWith(`${n}:`)).length;
-    runtime = episodes !== null && perEpisode !== null ? episodes * perEpisode : null;
+    if (!showWatched && !base.manualAt && !c.skips?.seasons.has(n)) skippedEps = Math.min(skippedIn(n, episodes), Math.max(0, (episodes ?? 0) - watchedEps));
+    runtime = episodes !== null && perEpisode !== null ? (episodes - skippedEps) * perEpisode : null;
     if (c.present) availability = inSeason.length === 0 ? (s.availability.state === 'unknown' ? 'unknown' : 'not_in_library') : episodes !== null && inSeason.length >= episodes ? 'in_library' : 'partially_in_library';
   } else {
     const k = key(i.season_number!, i.episode_number!);
@@ -363,11 +400,13 @@ function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<Timel
   }
 
   if (episodes !== null) watchedEps = Math.min(watchedEps, episodes);
+  // Episodes still to count: skipped ones are not part of the entry any more.
+  const counted = episodes !== null ? episodes - skippedEps : null;
   const state: EntryState =
     base.manualAt && kind !== 'show'
       ? 'watched'
-      : episodes !== null
-        ? watchedEps >= episodes && episodes > 0
+      : counted !== null
+        ? watchedEps >= counted && counted > 0
           ? 'watched'
           : watchedEps > 0
             ? 'in_progress'
@@ -377,8 +416,8 @@ function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<Timel
           : watchedEps > 0
             ? 'in_progress'
             : 'unwatched';
-  const pct = state === 'watched' ? 100 : episodes ? Math.round((watchedEps / episodes) * 100) : 0;
-  const watchedMinutes = runtime === null ? 0 : state === 'watched' ? runtime : episodes ? Math.round((runtime * watchedEps) / episodes) : 0;
+  const pct = state === 'watched' ? 100 : counted ? Math.round((watchedEps / counted) * 100) : 0;
+  const watchedMinutes = runtime === null ? 0 : state === 'watched' ? runtime : counted ? Math.round((runtime * watchedEps) / counted) : 0;
   const entryViewing = state === 'watched' ? 'watched' : state === 'in_progress' ? 'in_progress' : 'unwatched';
   return {
     ...base,
@@ -392,6 +431,7 @@ function baseEntryFor(i: ItemRow, position: number, c: EntryContext): Omit<Timel
     availability,
     stage: kind === 'show' ? s.stage : lifecycleStage(availability, s.request.state, entryViewing),
     watchedAt: state === 'watched' ? (base.manualAt ?? (kind === 'show' ? (s.viewing.progress?.lastPlayedAt ?? null) : null)) : null,
+    skippedEpisodes: kind === 'episode' ? null : skippedEps,
   };
 }
 

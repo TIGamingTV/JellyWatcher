@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { AlertTriangle, Check, Circle, GripVertical, Plus, SkipForward, Trash2, Tv, Undo2 } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, Circle, GripVertical, Plus, SkipForward, Trash2, Tv, Undo2 } from 'lucide-react';
 import { entryRequestable } from '../../../shared/status';
 import type { Timeline, TimelineEntry, TimelineSummary } from '../lib/types';
 import { useUser } from '../lib/session';
 import { date, duration, plural } from '../lib/format';
-import { entryFacts, entryHeading, nextEntryIndex, scopeOf } from '../lib/timeline';
+import { entryFacts, entryHeading, entryProgress, expandable, nextEntryIndex, scopeOf, timelineRail } from '../lib/timeline';
 
 export { entryFacts, entryHeading, scopeOf };
 import { PosterImage } from './Poster';
 import { StagePill } from './status';
 import { QuickWatchSheet, useSkipToggle } from './Watched';
 import { RequestSheet } from './RequestSheet';
+import { EpisodeGuide } from './EpisodeGuide';
 
 export function TimelineSummaryPanel({ summary, compact }: { summary: TimelineSummary; compact?: boolean }) {
   const pct = summary.totalMinutes > 0 ? Math.round((summary.watchedMinutes / summary.totalMinutes) * 100) : 0;
@@ -60,7 +61,13 @@ export function TimelineSummaryPanel({ summary, compact }: { summary: TimelineSu
 
 interface RowProps {
   e: TimelineEntry;
+  entries: TimelineEntry[];
+  listId?: number;
   next: boolean;
+  /** The rail runs through this entry (watched, or skipped before Up Next). */
+  done: boolean;
+  expanded: boolean;
+  onToggle: () => void;
   editing: boolean;
   removable: boolean;
   total: number;
@@ -73,11 +80,10 @@ interface RowProps {
   onHandleKey: (ev: React.KeyboardEvent<HTMLButtonElement>) => void;
 }
 
-function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, onWatch, onSkip, onRemove, onHandleDown, onHandleKey }: RowProps) {
+function EntryRow({ e, entries, listId, next, done, expanded, onToggle, editing, removable, total, canRequest, onRequest, onWatch, onSkip, onRemove, onHandleDown, onHandleKey }: RowProps) {
   const { title, part } = entryHeading(e);
   const facts = entryFacts(e);
-  const progressLabel =
-    e.state === 'in_progress' && e.episodes ? `${e.watchedEpisodes ?? 0} of ${plural(e.episodes, 'episode')}` : e.state === 'in_progress' ? `${e.percent}% watched` : null;
+  const progressLabel = entryProgress(e);
   const kicker = e.header
     ? e.state === 'watched'
       ? 'Watched'
@@ -94,6 +100,7 @@ function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, o
             ? 'Watching'
             : null;
   const name = `${title}${part ? `, ${part}` : ''}`;
+  const canExpand = expandable(e) && !editing;
   const body = (
     <>
       <div className="tl-thumb" aria-hidden>
@@ -104,6 +111,7 @@ function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, o
         <div className="tl-title">
           {title}
           {part && <span className="secondary" style={{ fontWeight: 500 }}> · {part}</span>}
+          {canExpand && <ChevronDown size={16} className="tl-chevron" aria-hidden />}
         </div>
         <div className="tl-sub">
           {facts.map((f) => (
@@ -120,82 +128,95 @@ function EntryRow({ e, next, editing, removable, total, canRequest, onRequest, o
     </>
   );
   const label = `${e.position}. ${name}. ${facts.join(', ')}. ${kicker ?? ''}`;
+  const panelId = `tl-episodes-${e.itemId}`;
   return (
-    <li className={`tl-item ${e.state}${e.header ? ' header' : ''}${e.skipped && !e.header ? ' skipped' : ''}${next ? ' next' : ''}`} style={{ ['--pct' as string]: e.percent }} aria-current={next ? 'step' : undefined} data-item={e.itemId}>
-      <span className="tl-node" aria-hidden>
-        {e.header ? <Tv size={13} strokeWidth={2.5} /> : e.state === 'watched' ? <Check size={14} strokeWidth={3} /> : e.skipped ? <SkipForward size={12} strokeWidth={2.5} /> : e.position}
-      </span>
-      {e.title && !editing ? (
-        <Link to={`/titles/${e.title.id}`} className="tl-card" aria-label={label}>
-          {body}
-        </Link>
-      ) : (
-        <div className="tl-card">{body}</div>
-      )}
-      <div className="tl-side">
-        {editing ? (
-          removable && (
-            <button className="icon-btn tl-remove" onClick={() => onRemove(e)} aria-label={`Remove ${name} from the list`} title="Remove">
-              <Trash2 size={17} />
-            </button>
-          )
-        ) : e.header ? null : (
-          <>
-            {e.matched ? (
-              e.state !== 'watched' &&
-              !e.skipped && (
-                <div className="tl-status">
-                  {e.stage === 'listed' ? !canRequest && <span className="pill">Not Requested</span> : <StagePill stage={e.stage} />}
-                  {canRequest && (
-                    <button className="btn btn-small tl-request" onClick={() => onRequest(e)} aria-haspopup="dialog" aria-label={`Request ${name}`}>
-                      <Plus size={14} aria-hidden /> {e.stage === 'declined' || e.stage === 'failed' ? 'Request Again' : 'Request'}
+    <li
+      className={`tl-item ${e.state}${e.header ? ' header' : ''}${e.skipped && !e.header ? ' skipped' : ''}${next ? ' next' : ''}${done ? ' done' : ''}${expanded && canExpand ? ' expanded' : ''}`}
+      style={{ ['--pct' as string]: e.percent }}
+      aria-current={next ? 'step' : undefined}
+      data-item={e.itemId}
+    >
+      <div className="tl-row">
+        <span className="tl-node" aria-hidden>
+          {e.header ? <Tv size={13} strokeWidth={2.5} /> : e.state === 'watched' ? <Check size={14} strokeWidth={3} /> : e.skipped ? <SkipForward size={12} strokeWidth={2.5} /> : e.position}
+        </span>
+        {canExpand ? (
+          <button type="button" className="tl-card tl-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls={expanded ? panelId : undefined} aria-label={`${label}. ${expanded ? 'Hide' : 'Show'} episodes`}>
+            {body}
+          </button>
+        ) : e.title && !editing ? (
+          <Link to={`/titles/${e.title.id}`} className="tl-card" aria-label={label}>
+            {body}
+          </Link>
+        ) : (
+          <div className="tl-card">{body}</div>
+        )}
+        <div className="tl-side">
+          {editing ? (
+            removable && (
+              <button className="icon-btn tl-remove" onClick={() => onRemove(e)} aria-label={`Remove ${name} from the list`} title="Remove">
+                <Trash2 size={17} />
+              </button>
+            )
+          ) : e.header ? null : (
+            <>
+              {e.matched ? (
+                e.state !== 'watched' &&
+                !e.skipped && (
+                  <div className="tl-status">
+                    {e.stage === 'listed' ? !canRequest && <span className="pill">Not Requested</span> : <StagePill stage={e.stage} />}
+                    {canRequest && (
+                      <button className="btn btn-small tl-request" onClick={() => onRequest(e)} aria-haspopup="dialog" aria-label={`Request ${name}`}>
+                        <Plus size={14} aria-hidden /> {e.stage === 'declined' || e.stage === 'failed' ? 'Request Again' : 'Request'}
+                      </button>
+                    )}
+                  </div>
+                )
+              ) : (
+                <Link to="/watchlists/review" className="pill pill-orange">
+                  <AlertTriangle size={12} aria-hidden /> Needs Match
+                </Link>
+              )}
+              {e.matched && e.title && (
+                <div className="tl-actions">
+                  {e.state !== 'watched' && (
+                    <button
+                      className={`tl-check tl-skip${e.skipped ? ' on' : ''}`}
+                      onClick={() => onSkip(e)}
+                      aria-pressed={e.skipped}
+                      aria-label={e.skipped ? `${name}: not watching. Put it back in the watch order` : `Not watching ${name}: skip it`}
+                      title={e.skipped ? 'Not watching · tap to put it back' : 'Not watching (skip)'}
+                    >
+                      {e.skipped ? <Undo2 size={16} aria-hidden /> : <SkipForward size={17} aria-hidden />}
                     </button>
                   )}
-                </div>
-              )
-            ) : (
-              <Link to="/watchlists/review" className="pill pill-orange">
-                <AlertTriangle size={12} aria-hidden /> Needs Match
-              </Link>
-            )}
-            {e.matched && e.title && (
-              <div className="tl-actions">
-                {e.state !== 'watched' && (
                   <button
-                    className={`tl-check tl-skip${e.skipped ? ' on' : ''}`}
-                    onClick={() => onSkip(e)}
-                    aria-pressed={e.skipped}
-                    aria-label={e.skipped ? `${name}: not watching. Put it back in the watch order` : `Not watching ${name}: skip it`}
-                    title={e.skipped ? 'Not watching · tap to put it back' : 'Not watching (skip)'}
+                    className={`tl-check${e.state === 'watched' ? ' on' : ''}`}
+                    onClick={() => onWatch(e)}
+                    aria-label={e.state === 'watched' ? `${name}: watched. Change the date or unmark` : `Mark ${name} as watched`}
+                    title={e.state === 'watched' ? 'Watched' : 'Mark as watched'}
+                    aria-haspopup="dialog"
                   >
-                    {e.skipped ? <Undo2 size={16} aria-hidden /> : <SkipForward size={17} aria-hidden />}
+                    {e.state === 'watched' ? <Check size={16} strokeWidth={3} aria-hidden /> : <Circle size={18} aria-hidden />}
                   </button>
-                )}
-                <button
-                  className={`tl-check${e.state === 'watched' ? ' on' : ''}`}
-                  onClick={() => onWatch(e)}
-                  aria-label={e.state === 'watched' ? `${name}: watched. Change the date or unmark` : `Mark ${name} as watched`}
-                  title={e.state === 'watched' ? 'Watched' : 'Mark as watched'}
-                  aria-haspopup="dialog"
-                >
-                  {e.state === 'watched' ? <Check size={16} strokeWidth={3} aria-hidden /> : <Circle size={18} aria-hidden />}
-                </button>
-              </div>
-            )}
-          </>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        {editing && (
+          <button
+            className="tl-handle"
+            aria-label={`Move ${name}, position ${e.position} of ${total}. Use the arrow keys to move.`}
+            aria-roledescription="sortable"
+            onPointerDown={onHandleDown}
+            onKeyDown={onHandleKey}
+          >
+            <GripVertical size={20} aria-hidden />
+          </button>
         )}
       </div>
-      {editing && (
-        <button
-          className="tl-handle"
-          aria-label={`Move ${name}, position ${e.position} of ${total}. Use the arrow keys to move.`}
-          aria-roledescription="sortable"
-          onPointerDown={onHandleDown}
-          onKeyDown={onHandleKey}
-        >
-          <GripVertical size={20} aria-hidden />
-        </button>
-      )}
+      {expanded && canExpand && <EpisodeGuide entry={e} entries={entries} listId={listId} editable={removable} id={panelId} />}
     </li>
   );
 }
@@ -228,13 +249,17 @@ interface DragState {
  */
 export function TimelineView({
   timeline,
+  listId,
   editing = false,
   removable = false,
   onOrder,
   onRemove,
 }: {
   timeline: Timeline;
+  /** The list shown (adding a show's specials to it). */
+  listId?: number;
   editing?: boolean;
+  /** A local list: entries can be removed and added. */
   removable?: boolean;
   onOrder?: (itemIds: number[]) => void;
   onRemove?: (e: TimelineEntry) => void;
@@ -252,6 +277,14 @@ export function TimelineView({
   }, [timeline.entries]);
 
   const nextIndex = nextEntryIndex(entries);
+  const rail = timelineRail(entries, nextIndex);
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
+  const toggle = (itemId: number) =>
+    setExpanded((cur) => {
+      const out = new Set(cur);
+      if (!out.delete(itemId)) out.add(itemId);
+      return out;
+    });
   const skip = useSkipToggle();
   const onSkip = (e: TimelineEntry) => {
     if (!e.title) return;
@@ -378,7 +411,12 @@ export function TimelineView({
           <EntryRow
             key={e.itemId}
             e={e}
+            entries={entries}
+            listId={listId}
             next={!editing && i === nextIndex}
+            done={rail[i]!}
+            expanded={!editing && expanded.has(e.itemId)}
+            onToggle={() => toggle(e.itemId)}
             editing={editing}
             removable={removable}
             total={entries.length}

@@ -63,6 +63,27 @@ export interface TitleMetadata {
   seasonCount?: number | null;
 }
 
+/** One episode from a season's details. */
+export interface EpisodeMetadata {
+  episode: number;
+  name: string | null;
+  airDate: string | null;
+  /** Minutes; null when the source does not say (Seerr never does). */
+  runtime: number | null;
+}
+
+/** The episodes of each season; seasons the source could not find are left out. */
+export type SeasonEpisodes = Map<number, EpisodeMetadata[]>;
+
+const SeasonDetails = z.object({
+  episodes: z
+    .array(z.object({ episode_number: z.number(), name: z.string().nullish(), air_date: z.string().nullish(), runtime: z.number().nullish() }))
+    .nullish(),
+});
+
+/** Seasons appended to one show request (TMDb allows 20 appends per request). */
+const SEASONS_PER_REQUEST = 20;
+
 /** Regular-season episode and season totals, preferring the per-season breakdown. */
 export function showTotals(seasons: TitleMetadata['seasons'], numberOfEpisodes?: number | null, numberOfSeasons?: number | null) {
   const regular = (seasons ?? []).filter((s) => s.seasonNumber > 0);
@@ -268,5 +289,24 @@ export class TmdbClient {
       if (err instanceof ProviderError && err.kind === 'not_found') return null;
       throw err;
     }
+  }
+
+  /** Episode lists of a show's seasons, up to 20 seasons per request (append_to_response). */
+  async seasonEpisodes(tvId: number, seasons: number[]): Promise<SeasonEpisodes> {
+    const out: SeasonEpisodes = new Map();
+    for (let i = 0; i < seasons.length; i += SEASONS_PER_REQUEST) {
+      const chunk = seasons.slice(i, i + SEASONS_PER_REQUEST);
+      const res = await this.http.get(`/tv/${tvId}`, { append_to_response: chunk.map((n) => `season/${n}`).join(',') });
+      const data = (res.data ?? {}) as Record<string, unknown>;
+      for (const n of chunk) {
+        const p = SeasonDetails.safeParse(data[`season/${n}`]);
+        if (!p.success || !p.data.episodes) continue;
+        out.set(
+          n,
+          p.data.episodes.map((e) => ({ episode: e.episode_number, name: e.name || null, airDate: e.air_date || null, runtime: e.runtime || null })),
+        );
+      }
+    }
+    return out;
   }
 }

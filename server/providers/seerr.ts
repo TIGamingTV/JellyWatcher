@@ -79,6 +79,10 @@ const Details = z.object({
 });
 export type SeerrDetails = z.infer<typeof Details>;
 
+const SeasonJson = z.object({
+  episodes: z.array(z.object({ episodeNumber: z.number(), name: z.string().nullish(), airDate: z.string().nullish() })).nullish(),
+});
+
 const SearchResult = z.object({
   id: z.number(),
   mediaType: z.string(),
@@ -202,6 +206,22 @@ export class SeerrClient {
     const parsed = Details.safeParse(res.data);
     if (!parsed.success) throw new ProviderError('seerr', 'invalid_response');
     return parsed.data;
+  }
+
+  /**
+   * Episodes of one season (Seerr's TMDb proxy: name and air date, no runtime). Null when Seerr
+   * cannot find the season (it answers 500 rather than 404 for missing seasons).
+   */
+  async season(tvId: number, season: number): Promise<{ episode: number; name: string | null; airDate: string | null }[] | null> {
+    try {
+      const res = await this.http.get(`/tv/${tvId}/season/${season}`, undefined, { retries: 0 });
+      const p = SeasonJson.safeParse(res.data);
+      if (!p.success) throw new ProviderError('seerr', 'invalid_response');
+      return (p.data.episodes ?? []).map((e) => ({ episode: e.episodeNumber, name: e.name || null, airDate: e.airDate || null }));
+    } catch (err) {
+      if (err instanceof ProviderError && (err.kind === 'not_found' || err.status === 500)) return null;
+      throw err;
+    }
   }
 
   async createRequest(input: CreateRequestInput, asUser: number | null): Promise<CreateRequestResult> {

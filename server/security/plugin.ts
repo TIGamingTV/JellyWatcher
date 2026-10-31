@@ -42,6 +42,7 @@ export const PLUGIN_ROUTES: PluginRoute[] = [
   { method: 'PUT', path: /^\/api\/lists\/\d{1,12}\/mirror$/, user: true },
   { method: 'POST', path: /^\/api\/lists\/(link|local|trakt)$/, user: true },
   { method: 'GET', path: /^\/api\/titles\/\d{1,12}\/eligibility$/, user: true },
+  { method: 'GET', path: /^\/api\/titles\/\d{1,12}\/episodes$/, user: true },
   { method: 'POST', path: /^\/api\/titles\/\d{1,12}\/request$/, user: true },
   { method: 'PUT', path: /^\/api\/titles\/\d{1,12}\/(skipped|watched)$/, user: true },
 ];

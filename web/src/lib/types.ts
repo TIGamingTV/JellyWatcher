@@ -149,6 +149,43 @@ export interface TimelineEntry {
   header?: boolean;
   /** For headers: how many entries of the show follow it. */
   parts?: number | null;
+  /** Shows and seasons: unwatched episodes marked "Not Watching" (left out of progress and time). */
+  skippedEpisodes?: number | null;
+}
+
+export interface GuideEpisode {
+  episode: number;
+  name: string | null;
+  airDate: string | null;
+  aired: boolean;
+  runtime: number | null;
+  watched: boolean;
+  source: 'manual' | 'jellyfin' | null;
+  watchedAt: string | null;
+  skipped: boolean;
+  inLibrary: boolean;
+  jellyfinItemId: string | null;
+}
+
+export interface GuideSeason {
+  season: number;
+  year: number | null;
+  episodes: number;
+  watched: number;
+  skipped: number;
+  seasonSkipped: boolean;
+  runtime: number | null;
+  watchedMinutes: number;
+  manualAt: string | null;
+  list: GuideEpisode[];
+}
+
+/** GET /titles/:id/episodes */
+export interface EpisodeGuide {
+  titleId: number;
+  source: 'tmdb' | 'seerr' | null;
+  skipped: boolean;
+  seasons: GuideSeason[];
 }
 
 export interface JellyfinPluginView {
