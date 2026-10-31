@@ -674,6 +674,8 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
         season: z.number().int().min(0).max(500).nullable().optional(),
         episode: z.number().int().min(1).max(5000).nullable().optional(),
         episodeTitle: z.string().trim().max(300).nullable().optional(),
+        /** Place the new entry right after this one (e.g. a show's specials after the show). */
+        afterItemId: z.number().int().positive().optional(),
       }),
       req.body,
     );
@@ -691,6 +693,7 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
     });
     const itemId = ctx.lists.addLocalItem(id, { titleId, mediaType: body.mediaType, title: body.title, year: body.year ?? null, tmdbId: body.tmdbId, season: body.season, episode: body.episode, episodeTitle: body.episodeTitle });
     if (itemId < 0) throw new ApiError(409, 'already_in_list', 'That is already on this list.');
+    if (body.afterItemId) ctx.lists.placeAfter(id, itemId, body.afterItemId);
     void triggerJob(ctx, 'metadata', 'event');
     return { itemId, list: listView(ctx, ctx.lists.get(id)!) };
   });

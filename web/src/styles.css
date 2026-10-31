@@ -511,12 +511,15 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
 .progress-lg { height: 8px; border-radius: 4px; margin-top: 0; }
 
 .timeline { list-style: none; margin: 0; padding: 0; position: relative; }
-.tl-item { position: relative; display: grid; grid-template-columns: 34px 52px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 10px 0; }
-.tl-item::before { content: ''; position: absolute; left: 16px; top: 0; bottom: 0; width: 2px; background: var(--separator-strong); }
-.tl-item:first-child::before { top: 50%; }
-.tl-item:last-child::before { bottom: 50%; }
-.tl-item.watched::before { background: var(--accent); }
-.tl-item.watched + .tl-item:not(.watched)::before { background: linear-gradient(var(--accent) 50%, var(--separator-strong) 50%); }
+/* The rail runs through "done" rows: watched, and skipped before Up Next (the skip node sits on top). */
+.tl-item { position: relative; }
+.tl-row { position: relative; display: grid; grid-template-columns: 34px 52px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 10px 0; }
+.tl-row::before { content: ''; position: absolute; left: 16px; top: 0; bottom: 0; width: 2px; background: var(--separator-strong); }
+.tl-item:first-child > .tl-row::before { top: 50%; }
+.tl-item:last-child:not(.expanded) > .tl-row::before { bottom: 50%; }
+.tl-item:only-child:not(.expanded) > .tl-row::before { display: none; }
+.tl-item.done > .tl-row::before { background: var(--accent); }
+.tl-item.done + .tl-item:not(.done) > .tl-row::before { background: linear-gradient(var(--accent) 50%, var(--separator-strong) 50%); }
 .tl-node { position: relative; z-index: 1; justify-self: center; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; background: var(--surface); border: 2px solid var(--separator-strong); color: var(--label-2); }
 .tl-item.watched .tl-node { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
 .tl-item.in_progress .tl-node { border-color: var(--accent); color: var(--accent); background: conic-gradient(var(--accent-tint) calc(var(--pct, 0) * 1%), var(--surface) 0); }
@@ -524,6 +527,12 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
 .tl-card { display: contents; color: inherit; }
 .tl-card:hover { text-decoration: none; }
 .tl-card:hover .tl-title { color: var(--accent); }
+/* Shows and seasons fold open into their episodes. */
+.tl-toggle { display: grid; grid-column: 2 / span 2; grid-template-columns: subgrid; align-items: center; margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 10px; }
+.tl-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.tl-chevron { display: inline-block; vertical-align: -3px; margin-left: 6px; color: var(--label-3); transition: transform 0.2s var(--ease); }
+.tl-toggle:hover .tl-chevron { color: var(--accent); }
+.tl-item.expanded .tl-chevron { transform: rotate(180deg); color: var(--accent); }
 .tl-thumb { width: 52px; aspect-ratio: 2 / 3; border-radius: 6px; overflow: hidden; background: var(--surface-2); box-shadow: var(--shadow-poster); position: relative; }
 .tl-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .tl-thumb .poster-fallback { font-size: 0.625rem; padding: 4px; }
@@ -540,12 +549,12 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
 .tl-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .tl-request { white-space: nowrap; }
 @media (max-width: 599px) {
-  .tl-item { grid-template-columns: 28px 42px minmax(0, 1fr); gap: 10px; }
-  .tl-item::before { left: 13px; }
+  .tl-row { gap: 10px; }
+  .tl-row::before { left: 13px; }
   .tl-node { width: 24px; height: 24px; font-size: 0.6875rem; }
   .tl-thumb { width: 42px; }
   /* Phones: the status pill moves under the title, the watched toggle stays on the first line. */
-  .tl-item { grid-template-columns: 28px 42px minmax(0, 1fr) auto; row-gap: 6px; }
+  .tl-row { grid-template-columns: 28px 42px minmax(0, 1fr) auto; row-gap: 6px; }
   .tl-side { display: contents; }
   .tl-side > .pill, .tl-side > .tl-status { grid-column: 3; grid-row: 2; justify-self: start; justify-content: flex-start; }
   .tl-side > .tl-actions, .tl-side > .tl-remove { grid-column: 4; grid-row: 1; }
@@ -558,33 +567,84 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
 .tl-actions { display: flex; align-items: center; gap: 2px; }
 .tl-skip.on { color: var(--label-2); background: var(--surface-2); }
 .tl-skip:hover { color: var(--label); background: var(--surface-hover); }
-.tl-item.header { padding-top: 18px; }
+.tl-item.header > .tl-row { padding-top: 18px; }
 .tl-item.header .tl-node { border-radius: 8px; background: var(--surface-2); color: var(--label); border-color: var(--separator-strong); box-shadow: none; }
 .tl-item.header .tl-title { font-family: var(--font-display); font-size: 1.125rem; font-weight: 700; }
 .tl-item.header.watched .tl-node { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
 .tl-item.skipped .tl-thumb, .tl-item.skipped .tl-title, .tl-item.skipped .tl-sub { opacity: 0.55; }
 .tl-item.skipped .tl-title { text-decoration: line-through; text-decoration-color: var(--label-3); }
 .tl-item.skipped .tl-node { border-style: dashed; color: var(--label-3); }
+.tl-item.skipped.done .tl-node { border-color: var(--accent); color: var(--accent); }
 @media (pointer: coarse) { .tl-check { width: 44px; height: 44px; } .tl-check.on { width: 36px; height: 36px; margin: 4px; } }
 .tl-handle { touch-action: none; -webkit-user-select: none; user-select: none; width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--label-2); cursor: grab; }
 .tl-handle:hover { background: var(--surface-hover); }
 .tl-handle:active { cursor: grabbing; }
 .tl-remove { color: var(--red); }
-.timeline.reordering .tl-item { grid-template-columns: 34px 52px minmax(0, 1fr) auto 44px; }
+.timeline.reordering .tl-row { grid-template-columns: 34px 52px minmax(0, 1fr) auto 44px; }
 .timeline.reordering .tl-card:hover .tl-title { color: inherit; }
 .timeline.sorting { -webkit-user-select: none; user-select: none; }
 .timeline.sorting .tl-item:not(.dragging) { transition: transform 0.18s var(--ease); }
 .tl-item.dragging { z-index: 3; background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-sheet); }
-.tl-item.dragging::before { display: none; }
+.tl-item.dragging > .tl-row::before { display: none; }
 .tl-panel { padding: 6px 16px; }
 @media (max-width: 599px) {
   .tl-panel { padding: 4px 10px; border-radius: var(--radius-m); }
   /* While sorting on a phone the artwork makes room for the title and the controls. */
-  .timeline.reordering .tl-item { grid-template-columns: 28px minmax(0, 1fr) auto 44px; }
+  .timeline.reordering .tl-row { grid-template-columns: 28px minmax(0, 1fr) auto 44px; }
   .timeline.reordering .tl-thumb { display: none; }
   .timeline.reordering .tl-side > .tl-remove { grid-column: 3; }
   .timeline.reordering .tl-handle { grid-column: 4; grid-row: 1; }
   .tl-hint { flex-basis: 100%; }
+}
+
+/* Episodes of an expanded show: seasons that fold open, each with its own rail */
+.tl-episodes { position: relative; padding: 0 0 12px 48px; }
+.tl-episodes::before { content: ''; position: absolute; left: 16px; top: 0; bottom: 0; width: 2px; background: var(--separator-strong); }
+.tl-item.done > .tl-episodes::before { background: var(--accent); }
+.tl-item:last-child > .tl-episodes::before { display: none; }
+.ep-season + .ep-season { border-top: 1px solid var(--separator); }
+.ep-season-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ep-season-head { flex: 1 1 260px; min-width: 0; display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(48px, 96px); align-items: center; gap: 10px; padding: 9px 8px 9px 4px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.ep-season-head:hover:not(:disabled) { background: var(--surface-hover); }
+.ep-season-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ep-season-head:disabled { cursor: default; }
+.ep-chevron { color: var(--label-2); transition: transform 0.2s var(--ease); }
+.ep-season.open .ep-chevron { transform: rotate(90deg); }
+.ep-season-text { min-width: 0; display: grid; }
+.ep-season-title { font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.ep-season-check { color: var(--accent); }
+.ep-season-facts { font-size: 0.8125rem; color: var(--label-2); font-variant-numeric: tabular-nums; }
+.ep-season-bar.progress { height: 4px; margin: 0; }
+.ep-list { list-style: none; margin: 0 0 8px; padding: 0 0 0 4px; }
+.ep-item { position: relative; display: grid; grid-template-columns: 20px 1.5rem minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 40px; padding: 3px 0; }
+.ep-item::before { content: ''; position: absolute; left: 9px; top: 0; bottom: 0; width: 2px; background: var(--separator-strong); }
+.ep-item:first-child::before { top: 50%; }
+.ep-item:last-child::before { bottom: 50%; }
+.ep-item:only-child::before { display: none; }
+.ep-item.done::before { background: var(--accent); }
+.ep-item.done + .ep-item:not(.done)::before { background: linear-gradient(var(--accent) 50%, var(--separator-strong) 50%); }
+.ep-node { position: relative; z-index: 1; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--separator-strong); background: var(--surface); display: grid; place-items: center; color: var(--label-3); }
+.ep-item.watched .ep-node { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
+.ep-item.skipped .ep-node { border-style: dashed; }
+.ep-item.skipped.done .ep-node { border-color: var(--accent); color: var(--accent); }
+.ep-item.next .ep-node { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.ep-body { min-width: 0; }
+.ep-title { line-height: 1.3; overflow-wrap: anywhere; }
+.ep-num { align-self: start; padding-top: 2px; text-align: right; font-size: 0.8125rem; font-weight: 600; color: var(--label-2); font-variant-numeric: tabular-nums; }
+.ep-sub { display: flex; flex-wrap: wrap; gap: 0 6px; font-size: 0.75rem; color: var(--label-2); font-variant-numeric: tabular-nums; }
+.ep-sub span + span::before { content: '·'; margin-right: 6px; }
+.ep-next { color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.ep-item.watched .ep-title { color: var(--label-2); }
+.ep-item.skipped .ep-title { text-decoration: line-through; text-decoration-color: var(--label-3); }
+.ep-item.skipped .ep-body, .ep-item.unaired .ep-body, .ep-item.skipped .ep-num { opacity: 0.55; }
+.tl-check.ep-btn { width: 32px; height: 32px; }
+.tl-check.ep-btn.on { width: 26px; height: 26px; margin: 3px; }
+@media (pointer: coarse) { .tl-check.ep-btn { width: 40px; height: 40px; } .tl-check.ep-btn.on { width: 30px; height: 30px; margin: 5px; } }
+.ep-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 8px 4px 0; font-size: 0.875rem; }
+@media (max-width: 599px) {
+  .tl-episodes { padding-left: 34px; }
+  .tl-episodes::before { left: 13px; }
+  .ep-season-head { grid-template-columns: 20px minmax(0, 1fr) 48px; }
 }
 
 /* Mark-as-watched sheet: seasons with episode chips */

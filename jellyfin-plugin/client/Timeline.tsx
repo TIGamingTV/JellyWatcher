@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { entryRequestable, REQUEST_STATE_LABEL, STAGE_LABEL } from '../../shared/status';
 import { date, duration, plural } from '../../web/src/lib/format';
-import { entryFacts, entryHeading, nextEntryIndex, scopeOf } from '../../web/src/lib/timeline';
+import { entryFacts, entryHeading, entryProgress, expandable, nextEntryIndex, scopeOf, timelineRail } from '../../web/src/lib/timeline';
 import { MIRROR_HINT, MIRROR_INTRO, MIRROR_OPTIONS, mirrorStatus } from '../../web/src/lib/mirror';
 import type { Eligibility, JellyfinMirrorMode, ListView, Timeline, TimelineEntry } from '../../web/src/lib/types';
 import { api, errorText, imageUrl } from './api';
 import { listSource, syncLabel, webLink, type Ctx } from './App';
+import { Episodes } from './Episodes';
 import { openJellyfinItem } from './jf-dom';
 import { Banner, Dialog, Icon, Poster, Progress, Spinner } from './ui';
 
@@ -26,6 +27,7 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
   const [busyItem, setBusyItem] = useState<number | null>(null);
   const [requesting, setRequesting] = useState<TimelineEntry | null>(null);
   const [mirroring, setMirroring] = useState(false);
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const scrolled = useRef(false);
 
   const reload = () => setTick((n) => n + 1);
@@ -55,6 +57,13 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
   }, [busy, mirrorPending, list]);
 
   const nextIndex = nextEntryIndex(entries);
+  const rail = timelineRail(entries, nextIndex);
+  const toggle = (itemId: number) =>
+    setExpanded((cur) => {
+      const out = new Set(cur);
+      if (!out.delete(itemId)) out.add(itemId);
+      return out;
+    });
 
   // Bring Up Next into view the first time the list opens.
   useEffect(() => {
@@ -210,6 +219,11 @@ export function TimelineScreen({ id, ctx }: { id: number; ctx: Ctx }) {
               key={e.itemId}
               e={e}
               next={i === nextIndex}
+              done={rail[i]!}
+              expanded={expanded.has(e.itemId)}
+              onToggle={() => toggle(e.itemId)}
+              onChanged={reload}
+              onError={(m) => ctx.toast('error', m)}
               busy={busyItem === e.itemId}
               canRequest={canRequest && entryRequestable(e)}
               reviewUrl={review}
@@ -325,6 +339,12 @@ function Stat({ n, label, accent }: { n: string; label: string; accent?: boolean
 interface RowProps {
   e: TimelineEntry;
   next: boolean;
+  /** The rail runs through this entry (watched, or skipped before Up Next). */
+  done: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onChanged: () => void;
+  onError: (message: string) => void;
   busy: boolean;
   canRequest: boolean;
   reviewUrl: string | null;
@@ -333,7 +353,7 @@ interface RowProps {
   onRequest: () => void;
 }
 
-function Row({ e, next, busy, canRequest, reviewUrl, onSkip, onWatch, onRequest }: RowProps) {
+function Row({ e, next, done, expanded, onToggle, onChanged, onError, busy, canRequest, reviewUrl, onSkip, onWatch, onRequest }: RowProps) {
   const { title, part } = entryHeading(e);
   const facts = entryFacts(e);
   const name = heading(e);
@@ -352,74 +372,95 @@ function Row({ e, next, busy, canRequest, reviewUrl, onSkip, onWatch, onRequest 
           : e.state === 'in_progress'
             ? 'Watching'
             : null;
-  const progress = e.header ? null : e.state === 'in_progress' && e.episodes ? `${e.watchedEpisodes ?? 0} of ${plural(e.episodes, 'episode')}` : e.state === 'in_progress' ? `${e.percent}% watched` : null;
+  const progress = e.header ? null : entryProgress(e);
   const playable = e.jellyfinItemId && PLAYABLE.has(e.availability);
   const showStage = !e.header && e.matched && e.state !== 'watched' && !e.skipped && !(canRequest && e.stage === 'listed');
-  return (
-    <li class={`jw-tl-item ${e.state}${e.header ? ' header' : ''}${e.skipped && !e.header ? ' skipped' : ''}${next ? ' next' : ''}`} style={{ ['--pct' as string]: e.percent }} aria-current={next ? 'step' : undefined}>
-      <span class="jw-tl-node" aria-hidden="true">
-        {e.header ? <Icon name="tv" size={16} /> : e.state === 'watched' ? <Icon name="check" size={16} /> : e.skipped ? <Icon name="skip_next" size={16} /> : e.position}
-      </span>
-      <Poster src={imageUrl(e.title?.posterUrl)} alt={title} />
-      <div class="jw-tl-body">
-        {kicker && <div class="jw-tl-kicker">{kicker}</div>}
-        <div class="jw-tl-title">
-          {title}
-          {part && <span class="jw-tl-part"> · {part}</span>}
-        </div>
-        <div class="jw-tl-facts">{[...facts, progress].filter(Boolean).join(' · ')}</div>
-        {e.state === 'in_progress' && !e.header && <Progress pct={e.percent} />}
-        <div class="jw-tl-status">
-          {!e.matched ? (
-            reviewUrl ? (
-              <a class="jw-pill jw-pill-warn" href={reviewUrl} target="_blank" rel="noopener noreferrer">
-                <Icon name="warning_amber" size={14} /> Needs Match
-              </a>
-            ) : (
-              <span class="jw-pill jw-pill-warn">Needs Match</span>
-            )
-          ) : (
-            showStage && <span class={`jw-pill jw-stage-${e.stage}`}>{e.stage === 'listed' ? 'Not Requested' : STAGE_LABEL[e.stage]}</span>
-          )}
-        </div>
+  const canExpand = expandable(e);
+  const panelId = `jw-episodes-${e.itemId}`;
+  const main = (
+    <>
+      {kicker && <div class="jw-tl-kicker">{kicker}</div>}
+      <div class="jw-tl-title">
+        {title}
+        {part && <span class="jw-tl-part"> · {part}</span>}
+        {canExpand && <Icon name="expand_more" size={20} />}
       </div>
-      {e.matched && e.title && (
-        <div class="jw-tl-actions">
-          {playable && (
-            <button class="jw-btn jw-btn-small jw-btn-primary" onClick={() => openJellyfinItem(e.jellyfinItemId!)} aria-label={`Play ${name} in Jellyfin`} title="Open in Jellyfin">
-              <Icon name="play_arrow" size={18} /> <span class="jw-hide-sm">Play</span>
+      <div class="jw-tl-facts">{[...facts, progress].filter(Boolean).join(' · ')}</div>
+      {e.state === 'in_progress' && !e.header && <Progress pct={e.percent} />}
+    </>
+  );
+  return (
+    <li
+      class={`jw-tl-item ${e.state}${e.header ? ' header' : ''}${e.skipped && !e.header ? ' skipped' : ''}${next ? ' next' : ''}${done ? ' done' : ''}${expanded && canExpand ? ' expanded' : ''}`}
+      style={{ ['--pct' as string]: e.percent }}
+      aria-current={next ? 'step' : undefined}
+    >
+      <div class="jw-tl-row">
+        <span class="jw-tl-node" aria-hidden="true">
+          {e.header ? <Icon name="tv" size={16} /> : e.state === 'watched' ? <Icon name="check" size={16} /> : e.skipped ? <Icon name="skip_next" size={16} /> : e.position}
+        </span>
+        <Poster src={imageUrl(e.title?.posterUrl)} alt={title} />
+        <div class="jw-tl-body">
+          {canExpand ? (
+            <button class="jw-tl-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls={expanded ? panelId : undefined} aria-label={`${name}. ${expanded ? 'Hide' : 'Show'} episodes`}>
+              {main}
             </button>
+          ) : (
+            main
           )}
-          {canRequest && !e.header && (
-            <button class="jw-btn jw-btn-small" onClick={onRequest} aria-haspopup="dialog" aria-label={`Request ${name}`}>
-              <Icon name="add" size={18} /> <span>{e.stage === 'declined' || e.stage === 'failed' ? 'Request Again' : 'Request'}</span>
-            </button>
-          )}
-          {e.state !== 'watched' && !e.header && (
-            <button
-              class={`jw-round${e.skipped ? ' on' : ''}`}
-              onClick={onSkip}
-              aria-pressed={e.skipped}
-              aria-label={e.skipped ? `${name}: not watching. Put it back in the watch order` : `Not watching ${name}: skip it`}
-              title={e.skipped ? 'Not watching · tap to put it back' : 'Not watching (skip)'}
-            >
-              <Icon name={e.skipped ? 'undo' : 'skip_next'} size={20} />
-            </button>
-          )}
-          {!e.header && (
-            <button
-              class={`jw-round jw-check${e.state === 'watched' ? ' on' : ''}`}
-              onClick={onWatch}
-              disabled={busy}
-              aria-pressed={e.state === 'watched'}
-              aria-label={e.state === 'watched' ? `${name}: watched. Unmark it` : `Mark ${name} as watched`}
-              title={e.state === 'watched' ? 'Watched · tap to unmark' : 'Mark as watched'}
-            >
-              {busy ? <Spinner /> : <Icon name={e.state === 'watched' ? 'check' : 'radio_button_unchecked'} size={20} />}
-            </button>
-          )}
+          <div class="jw-tl-status">
+            {!e.matched ? (
+              reviewUrl ? (
+                <a class="jw-pill jw-pill-warn" href={reviewUrl} target="_blank" rel="noopener noreferrer">
+                  <Icon name="warning_amber" size={14} /> Needs Match
+                </a>
+              ) : (
+                <span class="jw-pill jw-pill-warn">Needs Match</span>
+              )
+            ) : (
+              showStage && <span class={`jw-pill jw-stage-${e.stage}`}>{e.stage === 'listed' ? 'Not Requested' : STAGE_LABEL[e.stage]}</span>
+            )}
+          </div>
         </div>
-      )}
+        {e.matched && e.title && (
+          <div class="jw-tl-actions">
+            {playable && (
+              <button class="jw-btn jw-btn-small jw-btn-primary" onClick={() => openJellyfinItem(e.jellyfinItemId!)} aria-label={`Play ${name} in Jellyfin`} title="Open in Jellyfin">
+                <Icon name="play_arrow" size={18} /> <span class="jw-hide-sm">Play</span>
+              </button>
+            )}
+            {canRequest && !e.header && (
+              <button class="jw-btn jw-btn-small" onClick={onRequest} aria-haspopup="dialog" aria-label={`Request ${name}`}>
+                <Icon name="add" size={18} /> <span>{e.stage === 'declined' || e.stage === 'failed' ? 'Request Again' : 'Request'}</span>
+              </button>
+            )}
+            {e.state !== 'watched' && !e.header && (
+              <button
+                class={`jw-round${e.skipped ? ' on' : ''}`}
+                onClick={onSkip}
+                aria-pressed={e.skipped}
+                aria-label={e.skipped ? `${name}: not watching. Put it back in the watch order` : `Not watching ${name}: skip it`}
+                title={e.skipped ? 'Not watching · tap to put it back' : 'Not watching (skip)'}
+              >
+                <Icon name={e.skipped ? 'undo' : 'skip_next'} size={20} />
+              </button>
+            )}
+            {!e.header && (
+              <button
+                class={`jw-round jw-check${e.state === 'watched' ? ' on' : ''}`}
+                onClick={onWatch}
+                disabled={busy}
+                aria-pressed={e.state === 'watched'}
+                aria-label={e.state === 'watched' ? `${name}: watched. Unmark it` : `Mark ${name} as watched`}
+                title={e.state === 'watched' ? 'Watched · tap to unmark' : 'Mark as watched'}
+              >
+                {busy ? <Spinner /> : <Icon name={e.state === 'watched' ? 'check' : 'radio_button_unchecked'} size={20} />}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {expanded && canExpand && <Episodes entry={e} id={panelId} onChanged={onChanged} onError={onError} />}
     </li>
   );
 }

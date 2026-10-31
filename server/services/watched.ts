@@ -141,20 +141,37 @@ export class WatchService {
       .run(userId, titleId, season ?? TITLE, episode ?? WHOLE, nowIso());
   }
 
-  /** Takes a skip back, including skips of what contains the scope (the season, the whole title). */
+  /**
+   * Takes a skip back. Taking back part of a wider skip (one episode of a skipped season, one
+   * season of a skipped show) keeps the rest skipped by splitting the wider skip where sizes are
+   * known; taking back a whole title or season clears every narrower skip in it too.
+   */
   unskip(userId: number, titleId: number, scope: WatchScope): void {
-    const { season, episode } = this.normalize(titleId, scope);
+    const { season, episode, sizes } = this.normalize(titleId, scope);
+    const m = loadSkips(this.db, userId, [titleId]).get(titleId);
+    const now = nowIso();
+    const insert = this.db.prepare('INSERT OR IGNORE INTO skipped_entries (user_id, title_id, season, episode, created_at) VALUES (?, ?, ?, ?, ?)');
     const del = this.db.prepare('DELETE FROM skipped_entries WHERE user_id = ? AND title_id = ? AND season = ? AND episode = ?');
     this.db.transaction(() => {
-      del.run(userId, titleId, TITLE, WHOLE);
       if (season === null) {
-        // Unskipping the whole title clears every narrower skip too.
         this.db.prepare('DELETE FROM skipped_entries WHERE user_id = ? AND title_id = ?').run(userId, titleId);
         return;
       }
-      del.run(userId, titleId, season, WHOLE);
-      if (episode !== null) del.run(userId, titleId, season, episode);
-      else this.db.prepare('DELETE FROM skipped_entries WHERE user_id = ? AND title_id = ? AND season = ?').run(userId, titleId, season);
+      if (m?.title) {
+        for (const s of sizes.keys()) if (s !== season) insert.run(userId, titleId, s, WHOLE, now);
+        if (episode !== null) insert.run(userId, titleId, season, WHOLE, now);
+        del.run(userId, titleId, TITLE, WHOLE);
+      }
+      if (episode === null) {
+        this.db.prepare('DELETE FROM skipped_entries WHERE user_id = ? AND title_id = ? AND season = ?').run(userId, titleId, season);
+        return;
+      }
+      if (m?.title || m?.seasons.has(season)) {
+        const n = sizes.get(season);
+        if (n) for (let e = 1; e <= n; e++) if (e !== episode) insert.run(userId, titleId, season, e, now);
+        del.run(userId, titleId, season, WHOLE);
+      }
+      del.run(userId, titleId, season, episode);
     })();
   }
 
@@ -162,10 +179,15 @@ export class WatchService {
     return loadManualMarks(this.db, userId, [titleId]).get(titleId) ?? empty();
   }
 
+  /** Season sizes from the metadata, completed with the episode guide (which has specials too). */
   private sizes(titleId: number) {
     const row = this.db.prepare('SELECT media_type, seasons FROM titles WHERE id = ?').get(titleId) as { media_type: 'movie' | 'tv'; seasons: string | null } | undefined;
     if (!row) throw new ApiError(404, 'not_found', 'Title not found.');
-    return { mediaType: row.media_type, sizes: seasonSizes(row.seasons) };
+    const sizes = seasonSizes(row.seasons);
+    for (const r of this.db.prepare('SELECT season, MAX(episode) AS n FROM title_episodes WHERE title_id = ? GROUP BY season').all(titleId) as { season: number; n: number }[]) {
+      if (!sizes.get(r.season)) sizes.set(r.season, r.n);
+    }
+    return { mediaType: row.media_type, sizes };
   }
 
   private normalize(titleId: number, scope: WatchScope) {
