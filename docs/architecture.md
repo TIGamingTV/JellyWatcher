@@ -41,7 +41,7 @@ response validation (zod, tolerant of missing fields) and quirks:
 | `seerr.ts` | Status, users, search, details, request creation with `X-API-User`, request and media listing. |
 | `jellyfin.ts` | `MediaBrowser` auth header, credential verification, paginated library and user data, series episodes, images. |
 | `tmdb.ts` | Find by external id, search, details (runtime, season and episode counts, season air dates), public lists (API v4). |
-| `sonarr.ts`, `radarr.ts`, `homeassistant.ts` | Janitor only: series and movies with sizes and season statistics, season unmonitoring, file, show and movie deletion; Home Assistant notifications. |
+| `sonarr.ts`, `radarr.ts`, `homeassistant.ts` | Janitor only: series and movies with sizes and season statistics, season (un)monitoring and search, file, show and movie deletion; Home Assistant notifications. |
 
 `services/metadata.ts` abstracts *metadata*. It uses TMDb when a token is configured, and otherwise
 Seerr's TMDb proxy, so a TMDb key is optional.
@@ -78,7 +78,7 @@ are fetched in `sync/lists.ts`. Matching, dedup, status and UI then work unchang
 | `list_mirrors` | What the Jellyfin plugin last did with a list shown in Jellyfin (collection or playlist id, items, entries not in the library, error). |
 | `seerr_media`, `requests` | Mirror of Seerr media status and requests. |
 | `sync_runs`, `activity` | Job history and the Home activity feed. |
-| `janitor_rules`, `janitor_candidates`, `janitor_exclusions`, `janitor_log` | Janitor rules (match, watchers and steps as JSON), each movie/season/show moving through a rule's steps, titles kept by hand, and the audit log. Empty unless `JW_JANITOR` is on. |
+| `janitor_rules`, `janitor_candidates`, `janitor_exclusions`, `janitor_log`, `janitor_request_seasons` | Janitor rules (match, watchers, next season and steps as JSON), seasons the Janitor added to requests, each movie/season/show moving through a rule's steps, titles kept by hand, and the audit log. Empty unless `JW_JANITOR` is on. |
 
 ## Matching and deduplication
 

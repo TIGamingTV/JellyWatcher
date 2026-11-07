@@ -12,7 +12,7 @@ import { JanitorStore, type CandidateContext, type CandidateRow } from '../janit
 import { requireAdmin } from '../security/auth.js';
 import { posterUrl } from '../services/cards.js';
 import { triggerJob } from '../sync/scheduler.js';
-import { STEP_LABEL, templateRule, unitLabel, type CandidateState, type JanitorRule } from '../../shared/janitor.js';
+import { NEXT_SEASON_LABEL, STEP_LABEL, templateRule, unitLabel, type CandidateState, type JanitorRule } from '../../shared/janitor.js';
 
 /** Janitor administration. Registered only with JW_JANITOR on; every route needs an administrator. */
 
@@ -324,7 +324,7 @@ export async function janitorRoutes(app: FastifyInstance, { ctx }: AppDeps) {
         season: r.season,
         label: unitLabel(r.title, r.season),
         step: r.step,
-        stepLabel: (STEP_LABEL as Record<string, string>)[r.step] ?? r.step,
+        stepLabel: r.step === 'next_season' ? NEXT_SEASON_LABEL : ((STEP_LABEL as Record<string, string>)[r.step] ?? r.step),
         outcome: r.outcome,
         message: r.message,
         freedBytes: r.freed_bytes,
@@ -344,6 +344,20 @@ export async function janitorRoutes(app: FastifyInstance, { ctx }: AppDeps) {
         .filter((e) => e.title_id === id)
         .map((e) => exclusionView(ctx, e, rules)),
       requested: Boolean(ctx.db.prepare('SELECT 1 FROM requests WHERE title_id = ? AND seerr_request_id IS NOT NULL AND request_status IN (2, 5)').get(id)),
+      // Seasons the next-season option added to requests, one row per season.
+      addedSeasons: [
+        ...store
+          .addedSeasonsFor(id)
+          .reduce((m, r) => {
+            const e = m.get(r.season) ?? { season: r.season, requesters: [] as string[], monitored: false, addedAt: r.created_at };
+            const name = r.display_name ?? r.requested_by ?? 'someone';
+            if (!e.requesters.includes(name)) e.requesters.push(name);
+            e.monitored ||= r.monitored === 1;
+            m.set(r.season, e);
+            return m;
+          }, new Map<number, { season: number; requesters: string[]; monitored: boolean; addedAt: string }>())
+          .values(),
+      ],
     };
   });
 

@@ -2,14 +2,15 @@ import type { AppContext } from '../context.js';
 import { parseJson } from '../db/index.js';
 import type { RadarrMovie } from '../providers/radarr.js';
 import { sonarrSeasons, type SonarrSeason, type SonarrSeries } from '../providers/sonarr.js';
-import { epKey, loadManualMarks, loadSkips, seasonSizes } from '../services/watched.js';
+import { epKey, loadManualMarks, loadSkips, seasonSizes, type ManualMarks, type SkipMarks } from '../services/watched.js';
 import type { JanitorUnit } from '../../shared/janitor.js';
 import type { PersonProgress } from './policy.js';
+import { JanitorStore } from './store.js';
 
 /**
  * Turns Seerr requests into units the Janitor can clean up (a movie, one season, or a whole show)
  * and reads what each person has watched of them. Only titles requested through Seerr are ever
- * considered.
+ * considered. Seasons the Janitor added to a request (next-season option) count as requested by it.
  */
 
 /** Sonarr and Radarr as read at the start of a run; null when not connected or unreachable. */
@@ -43,7 +44,10 @@ export interface UnitRequest {
   userId: number | null;
   requestedBy: string | null;
   is4k: boolean;
+  /** Requested seasons plus those the Janitor added; empty: every season. */
   seasons: number[];
+  /** Of `seasons`, the ones the Janitor added. */
+  addedSeasons: number[];
   createdAt: string;
 }
 
@@ -59,6 +63,12 @@ export interface Unit {
   requests: UnitRequest[];
   /** Episodes in Jellyfin that have to be watched ("season:episode"); empty for movies. */
   episodes: string[];
+  /** Episodes the unit has, aired or not (Sonarr, TMDb or Jellyfin, whichever knows most); 0 for movies. */
+  episodeCount: number;
+  /** Season units: the season after this one in Sonarr; null when there is none (or no Sonarr data). */
+  next: { season: number; monitored: boolean } | null;
+  /** Shows: seasons any active request of the title covers (added ones included); null: every season. */
+  requestedSeasons: Set<number> | null;
   inLibrary: boolean;
   /** Everything that aired is downloaded; otherwise `incomplete` says why. */
   incomplete: string | null;
@@ -85,10 +95,14 @@ function activeRequests(ctx: AppContext): Map<number, UnitRequest[]> {
         WHERE seerr_request_id IS NOT NULL AND request_status IN (2, 5) ORDER BY created_at`,
     )
     .all() as { id: number; title_id: number; user_id: number | null; seerr_request_id: number; requested_by: string | null; is4k: number; seasons: string | null; created_at: string }[];
+  const added = new JanitorStore(ctx.db).addedSeasons();
   const out = new Map<number, UnitRequest[]>();
   for (const r of rows) {
     const list = out.get(r.title_id) ?? [];
-    list.push({ id: r.id, seerrRequestId: r.seerr_request_id, userId: r.user_id, requestedBy: r.requested_by, is4k: r.is4k === 1, seasons: parseJson<number[]>(r.seasons, []), createdAt: r.created_at });
+    const seasons = parseJson<number[]>(r.seasons, []);
+    // A request for every season needs nothing added.
+    const extra = seasons.length ? (added.get(r.id) ?? []).filter((s) => !seasons.includes(s)) : [];
+    list.push({ id: r.id, seerrRequestId: r.seerr_request_id, userId: r.user_id, requestedBy: r.requested_by, is4k: r.is4k === 1, seasons: [...seasons, ...extra].sort((a, b) => a - b), addedSeasons: extra, createdAt: r.created_at });
     out.set(r.title_id, list);
   }
   return out;
@@ -130,6 +144,9 @@ export function buildUnits(ctx: AppContext, kind: JanitorUnit, arr: ArrSnapshot)
         season: -1,
         requests,
         episodes: [],
+        episodeCount: 0,
+        next: null,
+        requestedSeasons: null,
         inLibrary: inLib,
         incomplete: null,
         sizeBytes: movie?.sizeOnDisk ?? null,
@@ -144,7 +161,9 @@ export function buildUnits(ctx: AppContext, kind: JanitorUnit, arr: ArrSnapshot)
     const sSeasons = new Map((series ? sonarrSeasons(series) : []).map((s) => [s.season, s]));
     const eps = (episodesOf.all(titleId) as { season: number; episode: number }[]).map((e) => [e.season, e.episode] as const);
     const sizes = seasonSizes(t.seasons);
-    const common = { seriesStatus: series?.status ?? null, sonarrId: series?.id ?? null, radarrId: null };
+    const requestedSeasons = requests.some((r) => r.seasons.length === 0) ? null : new Set(requests.flatMap((r) => r.seasons));
+    const common = { seriesStatus: series?.status ?? null, sonarrId: series?.id ?? null, radarrId: null, requestedSeasons };
+    const countOf = (season: number) => Math.max(sSeasons.get(season)?.total ?? 0, sizes.get(season) ?? 0, eps.filter(([s]) => s === season).length);
 
     if (kind === 'series') {
       const incomplete =
@@ -156,6 +175,8 @@ export function buildUnits(ctx: AppContext, kind: JanitorUnit, arr: ArrSnapshot)
         season: -1,
         requests,
         episodes: eps.map(([s, e]) => epKey(s, e)),
+        episodeCount: [...new Set([...sSeasons.keys(), ...sizes.keys(), ...eps.map(([s]) => s)])].filter((s) => s > 0).reduce((n, s) => n + countOf(s), 0),
+        next: null,
         inLibrary: eps.length > 0,
         incomplete,
         sizeBytes: series?.statistics?.sizeOnDisk ?? null,
@@ -171,12 +192,15 @@ export function buildUnits(ctx: AppContext, kind: JanitorUnit, arr: ArrSnapshot)
       const sonarr = sSeasons.get(season);
       const size = sizes.get(season) ?? null;
       const incomplete = sonarr ? seasonComplete(sonarr) : size !== null && inSeason.length < size ? `Only ${inSeason.length} of ${size} episodes are in Jellyfin.` : null;
+      const next = [...sSeasons.values()].filter((s) => s.season > season).sort((a, b) => a.season - b.season)[0];
       units.push({
         ...base,
         ...common,
         season,
         requests: requests.filter((r) => r.seasons.length === 0 || r.seasons.includes(season)),
         episodes: inSeason,
+        episodeCount: countOf(season),
+        next: next ? { season: next.season, monitored: next.monitored } : null,
         inLibrary: inSeason.length > 0,
         incomplete,
         sizeBytes: sonarr?.sizeOnDisk ?? null,
@@ -258,5 +282,36 @@ export function progressFor(ctx: AppContext, person: PersonInfo, unit: Unit): Pe
     started: any || played.size > 0 || Boolean(history),
     lastActivity: lastPlayed,
     watchlisted,
+    ...episodesLeft(unit, played, marks, skips, Boolean(showWatched)),
   };
+}
+
+/**
+ * How far one person is through a show unit: episodes they watched (played or marked) and how many
+ * are still to go, counting episodes not downloaded yet. Episodes marked "Not Watching" are not left
+ * to watch. `left` is null when they are not watching the show at all.
+ */
+function episodesLeft(
+  unit: Unit,
+  played: Map<string, string | null>,
+  marks: ManualMarks | undefined,
+  skips: SkipMarks | undefined,
+  showWatched: boolean,
+): { watched: number; left: number | null } {
+  if (skips?.title) return { watched: 0, left: null };
+  const inUnit = (s: number) => (unit.season >= 0 ? s === unit.season : s > 0);
+  const whole = (s: number) => showWatched || Boolean(marks?.title) || Boolean(marks?.seasons.has(s));
+  if (unit.season >= 0 && whole(unit.season)) return { watched: unit.episodeCount, left: 0 };
+  const keys = new Set(unit.episodes);
+  for (const k of [...played.keys(), ...(marks?.episodes.keys() ?? [])]) if (inUnit(Number(k.split(':')[0]))) keys.add(k);
+  let watched = 0;
+  let covered = 0;
+  for (const k of keys) {
+    const [s, e] = k.split(':').map(Number) as [number, number];
+    if (played.has(k) || whole(s) || marks?.episodes.has(k)) {
+      watched++;
+      covered++;
+    } else if (skips && (skips.seasons.has(s) || skips.episodes.has(epKey(s, e)))) covered++;
+  }
+  return { watched, left: Math.max(0, Math.max(unit.episodeCount, keys.size) - covered) };
 }

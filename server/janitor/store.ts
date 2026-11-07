@@ -1,6 +1,6 @@
 import { nowIso, parseJson, type DB } from '../db/index.js';
 import { ApiError } from '../http/errors.js';
-import { DEFAULT_MATCH, DEFAULT_WATCHERS, type CandidateState, type JanitorRule, type JanitorRuleInput, type JanitorStep, type LogOutcome } from '../../shared/janitor.js';
+import { DEFAULT_MATCH, DEFAULT_NEXT_SEASON, DEFAULT_WATCHERS, type CandidateState, type JanitorRule, type JanitorRuleInput, type JanitorStep, type LogOutcome } from '../../shared/janitor.js';
 
 interface RuleRow {
   id: number;
@@ -12,6 +12,7 @@ interface RuleRow {
   position: number;
   match: string;
   watchers: string;
+  next_season: string;
   steps: string;
   created_at: string;
   updated_at: string;
@@ -72,6 +73,7 @@ const toRule = (r: RuleRow): JanitorRule => ({
   position: r.position,
   match: { ...DEFAULT_MATCH, ...parseJson(r.match, {}) },
   watchers: { ...DEFAULT_WATCHERS, ...parseJson(r.watchers, {}) },
+  nextSeason: { ...DEFAULT_NEXT_SEASON, ...parseJson(r.next_season, {}) },
   steps: parseJson<JanitorStep[]>(r.steps, []),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -96,8 +98,8 @@ export class JanitorStore {
     const pos = (this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM janitor_rules').get() as { p: number }).p;
     const id = Number(
       this.db
-        .prepare('INSERT INTO janitor_rules (name, enabled, media_type, unit, mode, position, match, watchers, steps, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(input.name, input.enabled ? 1 : 0, input.mediaType, input.unit, input.mode, pos, JSON.stringify(input.match), JSON.stringify(input.watchers), JSON.stringify(input.steps), now, now).lastInsertRowid,
+        .prepare('INSERT INTO janitor_rules (name, enabled, media_type, unit, mode, position, match, watchers, next_season, steps, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(input.name, input.enabled ? 1 : 0, input.mediaType, input.unit, input.mode, pos, JSON.stringify(input.match), JSON.stringify(input.watchers), JSON.stringify(input.nextSeason), JSON.stringify(input.steps), now, now).lastInsertRowid,
     );
     return this.rule(id)!;
   }
@@ -116,8 +118,8 @@ export class JanitorStore {
     }
     this.db.transaction(() => {
       this.db
-        .prepare('UPDATE janitor_rules SET name = ?, enabled = ?, media_type = ?, unit = ?, mode = ?, match = ?, watchers = ?, steps = ?, updated_at = ? WHERE id = ?')
-        .run(input.name, input.enabled ? 1 : 0, input.mediaType, input.unit, input.mode, JSON.stringify(input.match), JSON.stringify(input.watchers), JSON.stringify(input.steps), nowIso(), id);
+        .prepare('UPDATE janitor_rules SET name = ?, enabled = ?, media_type = ?, unit = ?, mode = ?, match = ?, watchers = ?, next_season = ?, steps = ?, updated_at = ? WHERE id = ?')
+        .run(input.name, input.enabled ? 1 : 0, input.mediaType, input.unit, input.mode, JSON.stringify(input.match), JSON.stringify(input.watchers), JSON.stringify(input.nextSeason), JSON.stringify(input.steps), nowIso(), id);
       this.resetCandidates(id);
     })();
     return this.rule(id)!;
@@ -213,12 +215,44 @@ export class JanitorStore {
     return this.db.prepare('DELETE FROM janitor_exclusions WHERE until IS NOT NULL AND until <= ?').run(now.toISOString()).changes;
   }
 
+  // ---- Seasons the Janitor added to requests
+
+  /** Request id → seasons the Janitor added to it. */
+  addedSeasons(): Map<number, number[]> {
+    const out = new Map<number, number[]>();
+    for (const r of this.db.prepare('SELECT request_id, season FROM janitor_request_seasons ORDER BY season').all() as { request_id: number; season: number }[]) {
+      out.set(r.request_id, [...(out.get(r.request_id) ?? []), r.season]);
+    }
+    return out;
+  }
+
+  addSeason(e: { requestIds: number[]; season: number; titleId: number; ruleId: number; monitored: boolean; now: string }): void {
+    const stmt = this.db.prepare('INSERT OR IGNORE INTO janitor_request_seasons (request_id, season, title_id, rule_id, monitored, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+    this.db.transaction(() => e.requestIds.forEach((id) => stmt.run(id, e.season, e.titleId, e.ruleId, e.monitored ? 1 : 0, e.now)))();
+  }
+
+  /** Seasons the Janitor added to a title's requests, with who requested them. */
+  addedSeasonsFor(titleId: number) {
+    return this.db
+      .prepare(
+        `SELECT s.season, s.monitored, s.created_at, r.requested_by, u.display_name FROM janitor_request_seasons s
+           JOIN requests r ON r.id = s.request_id LEFT JOIN users u ON u.id = r.user_id
+          WHERE s.title_id = ? AND r.request_status IN (2, 5) ORDER BY s.season, s.created_at`,
+      )
+      .all(titleId) as { season: number; monitored: number; created_at: string; requested_by: string | null; display_name: string | null }[];
+  }
+
   // ---- Log
 
   log(e: { candidateId?: number | null; ruleId?: number | null; ruleName?: string | null; titleId?: number | null; title: string; season?: number; step: string; outcome: LogOutcome; message?: string | null; freedBytes?: number; at?: string }): void {
     this.db
       .prepare('INSERT INTO janitor_log (candidate_id, rule_id, rule_name, title_id, title, season, step, outcome, message, freed_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(e.candidateId ?? null, e.ruleId ?? null, e.ruleName ?? null, e.titleId ?? null, e.title, e.season ?? -1, e.step, e.outcome, e.message?.slice(0, 1000) ?? null, e.freedBytes ?? 0, e.at ?? nowIso());
+  }
+
+  /** The latest log entry of a step for a title's season (runs that would repeat themselves log once). */
+  lastLog(titleId: number, season: number, step: string): { outcome: LogOutcome; message: string | null } | undefined {
+    return this.db.prepare('SELECT outcome, message FROM janitor_log WHERE title_id = ? AND season = ? AND step = ? ORDER BY id DESC LIMIT 1').get(titleId, season, step) as { outcome: LogOutcome; message: string | null } | undefined;
   }
 
   logEntries(limit = 100, beforeId?: number) {

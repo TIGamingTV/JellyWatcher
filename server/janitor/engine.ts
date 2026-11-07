@@ -8,7 +8,7 @@ import { DESTRUCTIVE_STEPS, GATE_LABEL, STEP_LABEL, unitLabel, type JanitorRule,
 import { formatBytes, formatDate, notifyAdmin, renderTemplate } from './notify.js';
 import { evaluatePolicy } from './policy.js';
 import { JanitorStore, type CandidateContext, type CandidateRow, type ExclusionRow } from './store.js';
-import { arrIndex, buildUnits, findSeries, linkedPeople, personName, progressFor, type ArrSnapshot, type Unit } from './units.js';
+import { arrIndex, buildUnits, findSeries, linkedPeople, personName, progressFor, type ArrSnapshot, type Unit, type UnitRequest } from './units.js';
 
 /**
  * The Janitor: finds requests everyone needed has finished watching, then walks each through its
@@ -88,6 +88,9 @@ function matches(rule: JanitorRule, unit: Unit): boolean {
   return true;
 }
 
+/** The unit's requests this rule counts (its 4K filter). */
+const ruleRequests = (rule: JanitorRule, unit: Unit): UnitRequest[] => (rule.match.is4k === 'any' ? unit.requests : unit.requests.filter((r) => r.is4k === (rule.match.is4k === 'yes')));
+
 interface Judged {
   row: EvaluationRow;
   unit: Unit;
@@ -101,7 +104,7 @@ function judgeRule(ctx: AppContext, rule: JanitorRule, units: Unit[], exclusions
   for (const unit of units) {
     if (!matches(rule, unit)) continue;
     // The 4K filter narrows which requests count for this rule.
-    const requests = rule.match.is4k === 'any' ? unit.requests : unit.requests.filter((r) => r.is4k === (rule.match.is4k === 'yes'));
+    const requests = ruleRequests(rule, unit);
     const requesterIds = [...new Set(requests.map((r) => r.userId).filter((id): id is number => id !== null))];
     const known = requesterIds.map((id) => ({ id, name: personName(ctx, id) })).filter((p): p is { id: number; name: string } => p.name !== null);
     const unknown = [...new Set(requests.filter((r) => r.userId === null || !known.some((k) => k.id === r.userId)).map((r) => r.requestedBy ?? 'someone'))];
@@ -216,6 +219,8 @@ export interface RunStats {
   failed: number;
   awaitingApproval: number;
   freedBytes: number;
+  /** Seasons added to requests (and monitored) by the next-season option. */
+  nextSeasons: number;
   blocked?: string;
   errors?: string[];
 }
@@ -226,7 +231,7 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
   const store = new JanitorStore(ctx.db);
   const settings = ctx.settings.all();
   const rules = store.rules().filter((r) => r.enabled);
-  const stats: RunStats = { rules: rules.length, units: 0, eligible: 0, created: 0, cancelled: 0, steps: 0, deleted: 0, wouldDelete: 0, failed: 0, awaitingApproval: 0, freedBytes: 0 };
+  const stats: RunStats = { rules: rules.length, units: 0, eligible: 0, created: 0, cancelled: 0, steps: 0, deleted: 0, wouldDelete: 0, failed: 0, awaitingApproval: 0, freedBytes: 0, nextSeasons: 0 };
   store.pruneExclusions(now);
 
   // ---- 1. Evaluate: create candidates for units that became eligible, drop those that no longer are.
@@ -237,6 +242,7 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
   const cache = new Map<JanitorUnit, Unit[]>();
   const seen = new Set<number>();
   const nowIsoStr = now.toISOString();
+  const nextSeasonUnits: { rule: JanitorRule; unit: Unit }[] = [];
   // Without Sonarr data for shows (or Radarr for movies) the evaluation would be incomplete; keep what exists.
   const arrFailed = (rule: JanitorRule) => (rule.mediaType === 'tv' ? ctx.integrations.isReady('sonarr') && !arr.sonarr : ctx.integrations.isReady('radarr') && !arr.radarr);
   for (const rule of rules) {
@@ -244,6 +250,7 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
     const judged = judgeRule(ctx, rule, cache.get(rule.unit)!, exclusions, claimed, now);
     stats.units += judged.length;
     for (const { row, unit, context } of judged) {
+      if (rule.unit === 'season' && rule.nextSeason.enabled && row.status !== 'claimed' && unit.next) nextSeasonUnits.push({ rule, unit });
       const existing = store.candidateFor(rule.id, unit.titleId, unit.season);
       if (row.status === 'eligible') {
         stats.eligible++;
@@ -284,7 +291,14 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
     store.log({ candidateId: c.id, ruleId: c.rule_id, ruleName: rule?.name ?? store.rule(c.rule_id)?.name, titleId: c.title_id, title: ctxt.title ?? `Title ${c.title_id}`, season: c.season, step: 'cancel', outcome: 'info', message: rule ? 'No longer matches the rule.' : 'The rule was turned off.', at: nowIsoStr });
   }
 
-  // ---- 2. Advance candidates that are due.
+  // ---- 2. Next seasons for requesters close to the end of a season (not a deletion: no window or limit).
+  if (!settings['janitor.paused']) {
+    for (const { rule, unit } of nextSeasonUnits) {
+      if (await nextSeason(ctx, store, rule, unit, now)) stats.nextSeasons++;
+    }
+  }
+
+  // ---- 3. Advance candidates that are due.
   if (settings['janitor.paused']) {
     stats.blocked = 'paused';
     return { status: 'ok', stats: { ...stats } };
@@ -485,6 +499,57 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
   return { status: stats.failed > 0 || arr.errors.length > 0 ? 'partial' : 'ok', stats: { ...stats } };
 }
 
+/**
+ * The next-season option for one season unit: requesters with at most `episodesLeft` episodes of it
+ * to go get the next season added to their request, and Sonarr monitors it (and searches for it)
+ * unless it already does. Returns whether a season was added.
+ */
+async function nextSeason(ctx: AppContext, store: JanitorStore, rule: JanitorRule, unit: Unit, now: Date): Promise<boolean> {
+  const next = unit.next!;
+  const opt = rule.nextSeason;
+  const triggered: { name: string; left: number; requests: UnitRequest[] }[] = [];
+  const requests = ruleRequests(rule, unit);
+  for (const userId of new Set(requests.map((r) => r.userId).filter((id): id is number => id !== null))) {
+    // Only requests listing seasons can miss one; a request for the whole show already has it.
+    const missing = requests.filter((r) => r.userId === userId && r.seasons.length > 0 && !r.seasons.includes(next.season));
+    if (!missing.length) continue;
+    const name = personName(ctx, userId);
+    if (!name) continue;
+    const p = progressFor(ctx, { id: userId, name }, unit);
+    if (p.left === null || p.left === undefined || p.left > opt.episodesLeft || !p.watched) continue;
+    triggered.push({ name, left: p.left, requests: missing });
+  }
+  if (!triggered.length) return false;
+
+  const nowIsoStr = now.toISOString();
+  const who = triggered.map((t) => (t.left === 0 ? `${t.name} finished season ${unit.season}` : `${t.name} has ${t.left} ${t.left === 1 ? 'episode' : 'episodes'} of season ${unit.season} left`)).join(', ');
+  const names = triggered.map((t) => t.name).join(', ');
+  const log = (outcome: Parameters<JanitorStore['log']>[0]['outcome'], message: string) =>
+    store.log({ ruleId: rule.id, ruleName: rule.name, titleId: unit.titleId, title: unit.title, season: next.season, step: 'next_season', outcome, message, at: nowIsoStr });
+  const last = store.lastLog(unit.titleId, next.season, 'next_season');
+  if (rule.mode === 'dry_run') {
+    // Said once; it happens for real when the rule leaves dry run.
+    if (last?.outcome !== 'would') log('would', `${who}: would ${next.monitored ? `count season ${next.season} (already monitored in Sonarr)` : `monitor season ${next.season} in Sonarr${opt.search ? ' and search for it' : ''}, and count it`} as requested by ${names}.`);
+    return false;
+  }
+  const sonarr = ctx.integrations.sonarr();
+  try {
+    if (!sonarr || unit.sonarrId === null) throw new Error('Sonarr is not connected.');
+    if (!next.monitored) {
+      if (!(await sonarr.setSeasonMonitored(unit.sonarrId, next.season, true))) throw new Error(`Sonarr has no season ${next.season} of this show.`);
+      if (opt.search) await sonarr.searchSeason(unit.sonarrId, next.season);
+    }
+  } catch (err) {
+    const message = `Could not monitor season ${next.season} in Sonarr: ${scrub(errorMessage(err)).slice(0, 300)}`;
+    if (last?.outcome !== 'failed' || last.message !== message) log('failed', message);
+    return false;
+  }
+  store.addSeason({ requestIds: triggered.flatMap((t) => t.requests.map((r) => r.id)), season: next.season, titleId: unit.titleId, ruleId: rule.id, monitored: !next.monitored, now: nowIsoStr });
+  const did = next.monitored ? `season ${next.season} was already monitored in Sonarr` : `monitored season ${next.season} in Sonarr${opt.search ? ' and searched for it' : ''}`;
+  log('ok', `${who}: ${did}. It now counts as requested by ${names}.`);
+  return true;
+}
+
 interface StepResult {
   freedBytes: number;
   message: string;
@@ -611,5 +676,15 @@ async function gate(ctx: AppContext, condition: 'series_ended' | 'no_files_left'
   }
   if (!series) return 'gone';
   if (condition === 'series_ended') return series.status === 'ended' ? 'yes' : 'no';
-  return sonarrSeasons(series).filter((s) => s.season > 0).every((s) => s.files === 0) ? 'yes' : 'no';
+  if (!sonarrSeasons(series).filter((s) => s.season > 0).every((s) => s.files === 0)) return 'no';
+  // A season added to a request is still to come (maybe not downloaded yet) until the Janitor deleted it.
+  const pending = ctx.db
+    .prepare(
+      `SELECT 1 FROM janitor_request_seasons s JOIN requests r ON r.id = s.request_id
+        WHERE s.title_id = ? AND s.season != ? AND r.request_status IN (2, 5)
+          AND NOT EXISTS (SELECT 1 FROM janitor_candidates c WHERE c.title_id = s.title_id AND c.season = s.season AND c.acted = 1 AND c.dry_run = 0)
+        LIMIT 1`,
+    )
+    .get(c.title_id, c.season);
+  return pending ? 'no' : 'yes';
 }

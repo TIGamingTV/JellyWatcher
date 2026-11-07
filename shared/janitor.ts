@@ -34,6 +34,17 @@ export interface JanitorWatchers {
   dropAfterDays: number | null;
 }
 
+/**
+ * Shows by season only: once a requester has at most `episodesLeft` episodes of a season to go,
+ * the next season is monitored in Sonarr (and searched for) and becomes part of their request, so
+ * the Janitor cleans it up like a season they requested.
+ */
+export interface JanitorNextSeason {
+  enabled: boolean;
+  episodesLeft: number;
+  search: boolean;
+}
+
 export type JanitorStep =
   | { type: 'wait'; days: number; hours: number }
   | { type: 'notify'; message: string }
@@ -56,6 +67,7 @@ export interface JanitorRuleInput {
   mode: JanitorMode;
   match: JanitorMatch;
   watchers: JanitorWatchers;
+  nextSeason: JanitorNextSeason;
   steps: JanitorStep[];
 }
 
@@ -87,6 +99,9 @@ export const STEP_LABEL: Record<JanitorStepType, string> = {
   seerr_delete_media: 'Remove the title from Seerr',
 };
 
+/** Log label of what the next-season option did (not a step). */
+export const NEXT_SEASON_LABEL = 'Monitor the next season';
+
 export const GATE_LABEL: Record<'series_ended' | 'no_files_left', string> = {
   series_ended: 'the show has ended in Sonarr',
   no_files_left: 'no episode files are left (specials aside)',
@@ -115,12 +130,13 @@ export function defaultStep(type: JanitorStepType): JanitorStep {
 
 export const DEFAULT_MATCH: JanitorMatch = { requestedBy: [], is4k: 'any', seriesStatus: 'any' };
 export const DEFAULT_WATCHERS: JanitorWatchers = { requester: 'required', others: 'none', othersMode: 'all', atLeast: 1, dropAfterDays: 30 };
+export const DEFAULT_NEXT_SEASON: JanitorNextSeason = { enabled: false, episodesLeft: 3, search: true };
 
 export type JanitorTemplate = 'movie' | 'tv_season' | 'tv_series';
 
 /** Starting points; created disabled and in dry run. */
 export function templateRule(kind: JanitorTemplate): JanitorRuleInput {
-  const base = { enabled: false, mode: 'dry_run' as const, match: { ...DEFAULT_MATCH }, watchers: { ...DEFAULT_WATCHERS } };
+  const base = { enabled: false, mode: 'dry_run' as const, match: { ...DEFAULT_MATCH }, watchers: { ...DEFAULT_WATCHERS }, nextSeason: { ...DEFAULT_NEXT_SEASON } };
   switch (kind) {
     case 'movie':
       return {
@@ -142,6 +158,7 @@ export function templateRule(kind: JanitorTemplate): JanitorRuleInput {
         name: 'Watched seasons',
         mediaType: 'tv',
         unit: 'season',
+        nextSeason: { ...DEFAULT_NEXT_SEASON, enabled: true },
         steps: [
           { type: 'wait', days: 7, hours: 0 },
           { type: 'notify', message: DEFAULT_NOTIFY_MESSAGE },

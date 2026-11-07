@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_MATCH, DEFAULT_WATCHERS, STEPS_FOR_UNIT, STEP_LABEL, type JanitorRuleInput } from '../../shared/janitor.js';
+import { DEFAULT_MATCH, DEFAULT_NEXT_SEASON, DEFAULT_WATCHERS, STEPS_FOR_UNIT, STEP_LABEL, type JanitorRuleInput } from '../../shared/janitor.js';
 
 const Step = z.discriminatedUnion('type', [
   z.object({ type: z.literal('wait'), days: z.number().int().min(0).max(3650), hours: z.number().int().min(0).max(23).default(0) }),
@@ -36,6 +36,13 @@ export const RuleInputSchema = z
         dropAfterDays: z.number().int().min(1).max(3650).nullable().default(null),
       })
       .default({ ...DEFAULT_WATCHERS }),
+    nextSeason: z
+      .object({
+        enabled: z.boolean().default(false),
+        episodesLeft: z.number().int().min(0).max(100).default(3),
+        search: z.boolean().default(true),
+      })
+      .default({ ...DEFAULT_NEXT_SEASON }),
     steps: z.array(Step).max(30),
   })
   .superRefine((r, c) => {
@@ -44,6 +51,7 @@ export const RuleInputSchema = z
     r.steps.forEach((s, i) => {
       if (!allowed.includes(s.type)) c.addIssue({ code: 'custom', path: ['steps', i], message: `“${STEP_LABEL[s.type]}” does not fit this kind of rule.` });
     });
+    if (r.nextSeason.enabled && r.unit !== 'season') c.addIssue({ code: 'custom', path: ['nextSeason'], message: 'Only rules that handle shows season by season can monitor the next season.' });
     if (r.watchers.requester === 'ignored' && r.watchers.others === 'none') {
       c.addIssue({ code: 'custom', path: ['watchers'], message: 'Choose who has to watch it: the requester, other people, or both.' });
     }
