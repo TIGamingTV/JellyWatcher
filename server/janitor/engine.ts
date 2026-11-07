@@ -209,6 +209,15 @@ export function inWindow(now: Date, start: string, end: string): boolean {
 
 const waitMs = (s: Extract<JanitorStep, { type: 'wait' }>) => (s.days * 24 + s.hours) * 3600_000;
 
+/** Whether the steps from `from` on still stop for an approval that has not been given. */
+export function approvalAhead(rule: Pick<JanitorRule, 'mode' | 'steps'>, c: Pick<CandidateRow, 'approved_at' | 'dry_run'>, from: number): boolean {
+  if (c.approved_at || c.dry_run === 1) return false;
+  const rest = rule.steps.slice(from);
+  return rest.some((s) => s.type === 'approval') || (rule.mode === 'approval' && rest.some((s) => DESTRUCTIVE_STEPS.has(s.type)));
+}
+
+const APPROVE_HINT = 'Approve or keep it in JellyWatcher.';
+
 /** When the next deletion after `from` is due, counting the waits before it. */
 function nextDeletionAt(steps: JanitorStep[], from: number, anchor: Date): string | null {
   let t = anchor.getTime();
@@ -369,7 +378,12 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
         }
         case 'notify': {
           ctxt.dueAt = nextDeletionAt(rule.steps, c.step_index + 1, now);
-          const msg = renderTemplate(step.message, { title, season: c.season, requester: (ctxt.requesters ?? []).join(', '), date: ctxt.dueAt, size: ctxt.sizeBytes ?? null, rule: rule.name });
+          let msg = renderTemplate(step.message, { title, season: c.season, requester: (ctxt.requesters ?? []).join(', '), date: ctxt.dueAt, size: ctxt.sizeBytes ?? null, rule: rule.name });
+          // The warning doubles as the approval request: one message, and it can be approved right away.
+          if (approvalAhead(rule, c, c.step_index + 1)) {
+            msg = `${msg} ${APPROVE_HINT}`;
+            ctxt.approvalAsked = true;
+          }
           const r = await notifyAdmin(ctx, `${prefix}JellyWatcher Janitor`, msg);
           log('notify', r.ok ? 'ok' : 'skipped', r.ok ? msg : `${msg} (not sent: ${r.error})`);
           c.step_index++;
@@ -384,7 +398,7 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
             ctxt.dueAt = null;
             stats.awaitingApproval++;
             log('approval', 'info', 'Waiting for an administrator to approve.');
-            if (settings['janitor.notifyApproval']) await notifyAdmin(ctx, `${prefix}Janitor: approval needed`, `${label} is ready to be deleted (${formatBytes(ctxt.sizeBytes)}). Approve or keep it in JellyWatcher.`);
+            if (settings['janitor.notifyApproval'] && !ctxt.approvalAsked) await notifyAdmin(ctx, `${prefix}Janitor: approval needed`, `${label} is ready to be deleted (${formatBytes(ctxt.sizeBytes)}). ${APPROVE_HINT}`);
             save();
             stop = true;
             break;
@@ -438,7 +452,7 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
             ctxt.dueAt = null;
             stats.awaitingApproval++;
             log('approval', 'info', `Waiting for approval before: ${STEP_LABEL[step.type]}.`);
-            if (settings['janitor.notifyApproval']) await notifyAdmin(ctx, 'Janitor: approval needed', `${label} is ready to be deleted (${formatBytes(ctxt.sizeBytes)}). Approve or keep it in JellyWatcher.`);
+            if (settings['janitor.notifyApproval'] && !ctxt.approvalAsked) await notifyAdmin(ctx, 'Janitor: approval needed', `${label} is ready to be deleted (${formatBytes(ctxt.sizeBytes)}). ${APPROVE_HINT}`);
             save();
             stop = true;
             break;

@@ -148,7 +148,7 @@ same step.
 | Mode | Behaviour |
 | --- | --- |
 | **Dry run** | Every step runs, but deletions are only logged as “Would do”. Notifications say “[Dry run]”. |
-| **Ask first** | Stops before the first deletion of each cleanup until you approve it (Overview › Approve). You get a notification when something waits. |
+| **Ask first** | Stops before the first deletion of each cleanup until you approve it (Overview › Approve). With a *Notify* step before the deletion, that warning also asks for the approval (“Approve or keep it in JellyWatcher.”) and you can approve right away, so it is deleted on the date it names; otherwise you get an *approval needed* notification when it waits. Either way, one message per cleanup. |
 | **Automatic** | Deletes when the steps allow. |
 
 Further safety nets:
@@ -197,7 +197,8 @@ those on someone's list), so season rules know which episodes each person watche
 With Home Assistant connected you get:
 
 - your rules' **Notify** steps (warnings before a deletion),
-- **approval needed** (Settings: *Notify when a deletion needs approval*),
+- **approval needed** (Settings: *Notify when a deletion needs approval*), unless a *Notify* step of that
+  cleanup already asked for the approval,
 - **cleaned up**, with the space freed (*Notify when something was deleted*),
 - **deletion failed** after the last retry (*Notify when a deletion keeps failing*).
 
