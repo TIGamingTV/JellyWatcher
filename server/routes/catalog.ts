@@ -7,6 +7,7 @@ import { ApiError } from '../http/errors.js';
 import { IdParam, parse } from '../http/validate.js';
 import { requireUser, type SessionUser } from '../security/auth.js';
 import { card, cardsFor, JF_JOIN, posterUrl, userCtx } from '../services/cards.js';
+import { activeIntegrations } from '../services/integrations.js';
 import { isTimeline } from '../services/lists.js';
 import { checkEligibility, submitRequest, syncTitleFromSeerr } from '../services/requests.js';
 import { buildTimelines } from '../services/timeline.js';
@@ -399,9 +400,16 @@ export async function catalogRoutes(app: FastifyInstance, { ctx }: AppDeps) {
     if (!u.jellyfinUserId && ctx.integrations.isReady('jellyfin')) attention.push({ kind: 'link', message: 'Link your Jellyfin account to see what you have watched.', href: '/integrations/jellyfin' });
     if (!u.seerrUserId && ctx.integrations.isReady('seerr')) attention.push({ kind: 'link', message: 'Your account is not linked to Seerr yet, so you cannot request titles.', href: '/integrations/seerr' });
     if (u.role === 'admin') {
-      for (const p of ['jellyfin', 'seerr', 'tmdb', 'trakt'] as const) {
+      const names: Record<string, string> = { tmdb: 'TMDb', homeassistant: 'Home Assistant' };
+      for (const p of activeIntegrations(ctx.config.janitor)) {
         const v = ctx.integrations.view(p);
-        if (v.ready && v.status === 'error') attention.push({ kind: 'integration', message: `${p === 'tmdb' ? 'TMDb' : p[0]!.toUpperCase() + p.slice(1)}: ${v.lastError ?? 'connection failed'}`, href: `/integrations/${p}` });
+        if (v.ready && v.status === 'error') attention.push({ kind: 'integration', message: `${names[p] ?? p[0]!.toUpperCase() + p.slice(1)}: ${v.lastError ?? 'connection failed'}`, href: `/integrations/${p}` });
+      }
+      if (ctx.config.janitor) {
+        const failed = (ctx.db.prepare("SELECT COUNT(*) AS n FROM janitor_candidates WHERE state = 'failed'").get() as { n: number }).n;
+        const approval = (ctx.db.prepare("SELECT COUNT(*) AS n FROM janitor_candidates WHERE state = 'awaiting_approval'").get() as { n: number }).n;
+        if (failed) attention.push({ kind: 'janitor', message: `Janitor: ${failed} cleanup ${failed === 1 ? 'step failed' : 'steps failed'}.`, href: '/janitor' });
+        if (approval) attention.push({ kind: 'janitor', message: `Janitor: ${approval} ${approval === 1 ? 'deletion waits' : 'deletions wait'} for your approval.`, href: '/janitor' });
       }
     }
 

@@ -7,6 +7,7 @@ and runs the background sync jobs. State lives in one SQLite database on the `/d
  Browser ──HTTPS/HTTP──▶ Fastify ─┬─ routes/   (auth, CSRF, validation, per-user authorization)
                                   ├─ services/ (business logic: lists, titles, matcher, status, requests)
                                   ├─ sync/     (jobs + scheduler: lists, jellyfin, seerr, match, metadata)
+                                  ├─ janitor/  (optional cleanup rules and engine, JW_JANITOR)
                                   ├─ providers/(one adapter per external service, isolated API details)
                                   ├─ http/     (fetch client: timeouts, retries, backoff, error classes)
                                   └─ db/       (SQLite, SQL migrations)
@@ -40,6 +41,7 @@ response validation (zod, tolerant of missing fields) and quirks:
 | `seerr.ts` | Status, users, search, details, request creation with `X-API-User`, request and media listing. |
 | `jellyfin.ts` | `MediaBrowser` auth header, credential verification, paginated library and user data, series episodes, images. |
 | `tmdb.ts` | Find by external id, search, details (runtime, season and episode counts, season air dates), public lists (API v4). |
+| `sonarr.ts`, `radarr.ts`, `homeassistant.ts` | Janitor only: series and movies with sizes and season statistics, season unmonitoring, file, show and movie deletion; Home Assistant notifications. |
 
 `services/metadata.ts` abstracts *metadata*. It uses TMDb when a token is configured, and otherwise
 Seerr's TMDb proxy, so a TMDb key is optional.
@@ -76,6 +78,7 @@ are fetched in `sync/lists.ts`. Matching, dedup, status and UI then work unchang
 | `list_mirrors` | What the Jellyfin plugin last did with a list shown in Jellyfin (collection or playlist id, items, entries not in the library, error). |
 | `seerr_media`, `requests` | Mirror of Seerr media status and requests. |
 | `sync_runs`, `activity` | Job history and the Home activity feed. |
+| `janitor_rules`, `janitor_candidates`, `janitor_exclusions`, `janitor_log` | Janitor rules (match, watchers and steps as JSON), each movie/season/show moving through a rule's steps, titles kept by hand, and the audit log. Empty unless `JW_JANITOR` is on. |
 
 ## Matching and deduplication
 
@@ -108,10 +111,16 @@ merged.
 
 JellyWatcher is **read-only** towards every service except for creating Seerr requests (and, once
 during the guided setup, creating its own Jellyfin API key with the administrator's session). This
-avoids loops of conflicting state. The one exception runs the other way round: when a person chooses
-**Show in Jellyfin** for a list, the [Jellyfin plugin](jellyfin-plugin.md#collections-and-playlists)
-fetches what that list should look like (`GET /api/plugin/mirrors`) and makes Jellyfin match it. It
-only changes collections and playlists it created, and JellyWatcher never calls the plugin.
+avoids loops of conflicting state. Two exceptions:
+
+- When a person chooses **Show in Jellyfin** for a list, the [Jellyfin plugin](jellyfin-plugin.md#collections-and-playlists)
+  fetches what that list should look like (`GET /api/plugin/mirrors`) and makes Jellyfin match it. It
+  only changes collections and playlists it created, and JellyWatcher never calls the plugin.
+- The optional **[Janitor](janitor.md)**, turned on with `JW_JANITOR=true`, deletes what an
+  administrator's rules say: season files, shows and movies in **Sonarr and Radarr**, and requests or
+  media in **Seerr**. It only considers titles requested through Seerr, never writes to Jellyfin or
+  the file system, and every action is logged. Without the variable none of its routes, jobs or
+  integrations exist.
 
 Each status shown in the UI carries `syncedAt`, `source` and `stale`. Stale means not synced
 within 3× the interval, or the last sync failed. The UI says "Possibly outdated" instead of
@@ -122,7 +131,8 @@ presenting old data as current.
 - **Ticks:** every minute the scheduler checks each job's interval, set in Settings › Sync. A failing job backs off after 5, 10, 20… minutes, capped at its interval.
 - **Retries:** HTTP calls have timeouts and retries with jitter for 429, 502, 503, 504 and network errors, honouring `Retry-After`. Trakt calls are spaced 650 ms apart to stay under 500 requests per 5 minutes.
 - **Trakt tokens:** refresh tokens are single use, so refreshes are serialised per connection and persisted before use. `invalid_grant` marks the connection *needs re-auth*.
-- **Restarts:** runs interrupted by a restart are marked as such on startup.
+- **Restarts:** runs interrupted by a restart are marked as such on startup. Janitor cleanups that were mid-step resume at that step; deletions treat "already gone" as done.
+- **Janitor:** the `janitor` job runs on its own interval (Settings in the Janitor page) and after every Jellyfin sync. See [Janitor](janitor.md#how-a-run-works).
 
 ## Security model
 

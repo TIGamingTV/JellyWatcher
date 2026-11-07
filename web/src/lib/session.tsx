@@ -20,7 +20,7 @@ export function useMe() {
 export function useUser() {
   const { data } = useMe();
   if (!data?.user) throw new Error('useUser outside of an authenticated area');
-  return { user: data.user, services: data.services!, sources: data.sources ?? [], isAdmin: data.user.role === 'admin', version: data.version };
+  return { user: data.user, services: data.services!, sources: data.sources ?? [], isAdmin: data.user.role === 'admin', version: data.version, janitor: data.user.role === 'admin' && Boolean(data.features?.janitor) };
 }
 
 export function useAppearance(pref: 'system' | 'light' | 'dark' | undefined) {

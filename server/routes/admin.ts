@@ -8,6 +8,7 @@ import { nowIso } from '../db/index.js';
 import { ApiError } from '../http/errors.js';
 import { IdParam, parse } from '../http/validate.js';
 import { requireAdmin, requireUser } from '../security/auth.js';
+import { activeIntegrations } from '../services/integrations.js';
 import { SettingsSchema } from '../services/settings.js';
 import { triggerJob } from '../sync/scheduler.js';
 import { syncSeerrUsers } from '../sync/seerr.js';
@@ -167,7 +168,7 @@ export async function adminRoutes(app: FastifyInstance, { ctx, users, sessions }
   // Sync status is visible to everyone (no secrets); triggering global jobs needs admin.
   app.get('/sync/status', async (req) => {
     requireUser(req);
-    const jobs = (['seerr', 'jellyfin', 'lists', 'match', 'metadata'] as const).map((job) => {
+    const jobs = (['seerr', 'jellyfin', 'lists', 'match', 'metadata', ...(ctx.config.janitor ? (['janitor'] as const) : [])] as const).map((job) => {
       const last = ctx.jobs.lastRun(job);
       return { job, running: ctx.jobs.isRunning(job), last };
     });
@@ -176,7 +177,8 @@ export async function adminRoutes(app: FastifyInstance, { ctx, users, sessions }
 
   app.post('/admin/sync/:job', async (req) => {
     requireAdmin(req);
-    const { job } = parse(z.object({ job: z.enum(['seerr', 'jellyfin', 'lists', 'match', 'metadata']) }), req.params);
+    const { job } = parse(z.object({ job: z.enum(['seerr', 'jellyfin', 'lists', 'match', 'metadata', 'janitor']) }), req.params);
+    if (job === 'janitor' && !ctx.config.janitor) throw new ApiError(404, 'not_found', 'The Janitor is turned off (JW_JANITOR).');
     if (job === 'lists') {
       // A manual "sync all lists" refreshes every auto-sync list regardless of its interval.
       ctx.db.prepare('UPDATE lists SET last_attempt_at = NULL WHERE auto_sync = 1 AND sync_supported = 1').run();
@@ -195,7 +197,7 @@ export async function adminRoutes(app: FastifyInstance, { ctx, users, sessions }
   app.get('/admin/diagnostics', async (req) => {
     requireAdmin(req);
     const counts = Object.fromEntries(
-      ['users', 'lists', 'list_items', 'titles', 'jellyfin_items', 'jellyfin_user_data', 'seerr_media', 'requests', 'sync_runs'].map((t) => [
+      ['users', 'lists', 'list_items', 'titles', 'jellyfin_items', 'jellyfin_user_data', 'seerr_media', 'requests', 'sync_runs', ...(ctx.config.janitor ? ['janitor_rules', 'janitor_candidates', 'janitor_log'] : [])].map((t) => [
         t,
         (ctx.db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n,
       ]),
@@ -212,7 +214,7 @@ export async function adminRoutes(app: FastifyInstance, { ctx, users, sessions }
       counts,
       migrations,
       runningJobs: ctx.jobs.runningJobs(),
-      integrations: (['jellyfin', 'seerr', 'tmdb', 'trakt'] as const).map((p) => {
+      integrations: activeIntegrations(ctx.config.janitor).map((p) => {
         const v = ctx.integrations.view(p);
         return { provider: p, status: v.status, ready: v.ready, lastOkAt: v.lastOkAt, lastError: v.lastError };
       }),

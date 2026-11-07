@@ -3,7 +3,7 @@ import { nowIso, parseJson, type DB } from '../db/index.js';
 import { errorMessage } from '../http/errors.js';
 import { scrub } from '../logger.js';
 
-export type JobName = 'lists' | 'jellyfin' | 'seerr' | 'metadata' | 'match' | 'cleanup';
+export type JobName = 'lists' | 'jellyfin' | 'seerr' | 'metadata' | 'match' | 'cleanup' | 'janitor';
 
 export interface JobResult {
   runId: number;
@@ -97,6 +97,8 @@ export class JobRunner {
   recoverInterrupted(): void {
     this.db.prepare("UPDATE sync_runs SET status = 'error', error = 'Interrupted by a restart', finished_at = ? WHERE status = 'running'").run(nowIso());
     this.db.prepare("UPDATE lists SET last_status = 'error', last_error = 'Interrupted by a restart' WHERE last_status = 'running'").run();
+    // Janitor candidates resume at the step they were on; deletions treat "already gone" as done.
+    this.db.prepare("UPDATE janitor_candidates SET state = 'waiting', next_run_at = ? WHERE state = 'running'").run(nowIso());
   }
 
   prune(days = 90): void {

@@ -35,6 +35,8 @@ export interface Me {
   jellyfin: { serverName: string | null; quickConnect: boolean; autoCreate: boolean } | null;
   version: string;
   services?: { jellyfin: boolean; seerr: boolean; tmdb: boolean; trakt: boolean; jellyfinPlugin: boolean; metadata: 'tmdb' | 'seerr' | null };
+  /** Optional features of this server (administrators only). */
+  features?: { janitor: boolean };
   sources?: SourceDescriptor[];
 }
 
@@ -301,8 +303,10 @@ export interface Eligibility {
   checkedAt: string;
 }
 
+export type ServerProvider = 'jellyfin' | 'seerr' | 'tmdb' | 'trakt' | 'sonarr' | 'radarr' | 'homeassistant';
+
 export interface IntegrationView {
-  provider: 'jellyfin' | 'seerr' | 'tmdb' | 'trakt';
+  provider: ServerProvider;
   enabled?: boolean;
   ready: boolean;
   config?: Record<string, string | undefined>;

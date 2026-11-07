@@ -106,6 +106,11 @@ The database is backed up to `data/backups/` and migrated automatically on start
   page to Jellyfin's menu with your lists, their timelines, and Play, Request, Not Watching and
   Watched on every entry. It can also keep any list in Jellyfin as a **collection** or a **private
   playlist** in your order, so it shows up in every Jellyfin app, including Infuse.
+- **Janitor (optional, `JW_JANITOR=true`):** cleans up watched requests by your rules. A pipeline
+  editor per rule (waits, Home Assistant notifications, approvals, conditions, deletions) deletes
+  watched seasons, shows and movies in Sonarr and Radarr and the request in Seerr, once the
+  requester, the people watching along, or anyone you choose have finished. Dry run, approvals,
+  per-title *Keep*, a deletion window and a full log keep it safe. See [docs/janitor.md](docs/janitor.md).
 - **Homelab-friendly:** one container, SQLite with automatic backups, non-root and read-only,
   encrypted credentials, health check, optional webhooks. Works on phones, tablets and desktops.
 
@@ -135,6 +140,8 @@ Server connections:
 | **Seerr** | For requests | URL + API key. |
 | **TMDb** | Optional | API Read Access Token. Without it, Seerr's TMDb access is used; TMDb list links need it. |
 | **Trakt** | For Trakt lists | Client ID + Secret of a free app from trakt.tv/oauth/applications. |
+| **Sonarr / Radarr** | Janitor only | URL + API key. |
+| **Home Assistant** | Janitor only, optional | URL + long-lived access token + notify service. |
 
 Details and verified limits per service: [docs/integration-matrix.md](docs/integration-matrix.md).
 
@@ -147,6 +154,7 @@ Details and verified limits per service: [docs/integration-matrix.md](docs/integ
 | [Architecture](docs/architecture.md) | Design, data model, matching, security. |
 | [Integration matrix](docs/integration-matrix.md) | What each service allows, and what is unsupported and why. |
 | [Jellyfin plugin](docs/jellyfin-plugin.md) | The optional Watchlists page inside Jellyfin: install, security, limits. |
+| [Janitor](docs/janitor.md) | The optional cleanup of watched requests: rules, steps, safety, notifications. |
 
 ## Development
 

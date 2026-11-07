@@ -124,3 +124,22 @@ describe('TitleService', () => {
     expect(db.prepare('SELECT title_id FROM list_items').get()).toEqual({ title_id: a });
   });
 });
+
+describe('Janitor tables', () => {
+  it('follow a title when duplicate rows are merged', async () => {
+    const db = await freshDb();
+    const titles = new TitleService(db);
+    const a = titles.ensure({ mediaType: 'movie', tmdbId: 949, title: 'Heat' });
+    const b = titles.ensure({ mediaType: 'movie', imdbId: 'tt9999999', title: 'Heat?' });
+    const now = nowIso();
+    const rule = db.prepare("INSERT INTO janitor_rules (name, media_type, unit, created_at, updated_at) VALUES ('r', 'movie', 'movie', ?, ?)").run(now, now).lastInsertRowid;
+    db.prepare("INSERT INTO janitor_candidates (rule_id, title_id, state, anchor_at, eligible_at, created_at, updated_at) VALUES (?, ?, 'waiting', ?, ?, ?, ?)").run(rule, b, now, now, now, now);
+    db.prepare('INSERT INTO janitor_exclusions (title_id, created_at) VALUES (?, ?)').run(b, now);
+    db.prepare("INSERT INTO janitor_log (title_id, title, step, outcome, created_at) VALUES (?, 'Heat?', 'start', 'info', ?)").run(b, now);
+    titles.merge(b, a);
+    expect(db.prepare('SELECT title_id FROM janitor_candidates').get()).toEqual({ title_id: a });
+    expect(db.prepare('SELECT title_id FROM janitor_exclusions').get()).toEqual({ title_id: a });
+    expect(db.prepare('SELECT title_id FROM janitor_log').get()).toEqual({ title_id: a });
+    expect(() => db.prepare("INSERT INTO janitor_rules (name, media_type, unit, mode, created_at, updated_at) VALUES ('x', 'movie', 'movie', 'yolo', ?, ?)").run(now, now)).toThrow(/CHECK/);
+  });
+});

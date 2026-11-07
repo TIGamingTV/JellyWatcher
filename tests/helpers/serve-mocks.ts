@@ -3,12 +3,20 @@
  *   npx tsx tests/helpers/serve-mocks.ts
  * Then configure JellyWatcher with http://127.0.0.1:18096 (key jf-secret-key) and
  * http://127.0.0.1:15055 (key seerr-secret-key). Jellyfin login: alice / alicepw.
+ * For the Janitor (JW_JANITOR=1): Sonarr http://127.0.0.1:18989 (sonarr-secret-key), Radarr
+ * http://127.0.0.1:17878 (radarr-secret-key), Home Assistant http://127.0.0.1:18123 (token
+ * ha-long-lived-token, service mobile_app_test). Seerr has requests for Heat and Severance by Admin.
  * Development only — never shown as live data.
  */
 import http from 'node:http';
-import { JF, SEERR, createMocks } from './mocks';
+import { HA, JF, RADARR, SEERR, SONARR, createMocks } from './mocks';
 
 const mocks = createMocks();
+mocks.state.seerrMedia.set('tv:95396', { id: 2, tmdbId: 95396, tvdbId: 371980, mediaType: 'tv', status: 4 });
+mocks.state.seerrRequests.push(
+  { id: 500, status: 2, is4k: false, media: { id: 1, tmdbId: 949, mediaType: 'movie', status: 5 }, requestedBy: { id: 1, displayName: 'Admin' }, seasons: [], createdAt: '2026-08-01T00:00:00.000Z' },
+  { id: 501, status: 2, is4k: false, media: { id: 2, tmdbId: 95396, tvdbId: 371980, mediaType: 'tv', status: 4 }, requestedBy: { id: 1, displayName: 'Admin' }, seasons: [{ seasonNumber: 1 }, { seasonNumber: 2 }], createdAt: '2026-08-01T00:00:00.000Z' },
+);
 
 function serve(port: number, origin: string) {
   http
@@ -31,3 +39,6 @@ function serve(port: number, origin: string) {
 
 serve(18096, JF.url);
 serve(15055, SEERR.url);
+serve(18989, SONARR.url);
+serve(17878, RADARR.url);
+serve(18123, HA.url);

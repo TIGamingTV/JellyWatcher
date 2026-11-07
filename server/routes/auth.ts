@@ -297,6 +297,8 @@ export async function authRoutes(app: FastifyInstance, { ctx, users, sessions, s
         jellyfinPlugin: pluginKeys.get() !== null,
         metadata: ctx.metadata()?.name ?? null,
       },
+      /** Optional features turned on for this server (administrators only). */
+      features: { janitor: u.role === 'admin' && ctx.config.janitor },
       sources: SOURCE_DESCRIPTORS,
     };
   });

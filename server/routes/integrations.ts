@@ -7,13 +7,16 @@ import { normalizeServiceUrl } from '../http/client.js';
 import { ApiError, ProviderError } from '../http/errors.js';
 import { parse } from '../http/validate.js';
 import { scrub } from '../logger.js';
+import { HomeAssistantClient } from '../providers/homeassistant.js';
 import { JellyfinClient } from '../providers/jellyfin.js';
+import { RadarrClient } from '../providers/radarr.js';
 import { SeerrClient } from '../providers/seerr.js';
+import { SonarrClient } from '../providers/sonarr.js';
 import { TmdbClient } from '../providers/tmdb.js';
 import { TraktClient } from '../providers/trakt.js';
 import { randomToken } from '../security/crypto.js';
 import { requireAdmin, requireUser } from '../security/auth.js';
-import { SERVER_INTEGRATIONS, type ServerIntegration } from '../services/integrations.js';
+import { activeIntegrations, JANITOR_INTEGRATIONS, type ServerIntegration } from '../services/integrations.js';
 import { triggerJob } from '../sync/scheduler.js';
 
 const url = z.string().trim().min(1).max(500).transform((v, c) => {
@@ -32,6 +35,19 @@ const Schemas = {
   seerr: z.object({ config: z.object({ url, publicUrl: optionalUrl }), secrets: z.object({ apiKey: secret }).default({}) }),
   tmdb: z.object({ config: z.object({}).default({}), secrets: z.object({ token: secret }).default({}) }),
   trakt: z.object({ config: z.object({ clientId: z.string().trim().regex(/^[A-Za-z0-9]{16,128}$/, 'That does not look like a Trakt Client ID.') }), secrets: z.object({ clientSecret: secret }).default({}) }),
+  sonarr: z.object({ config: z.object({ url, publicUrl: optionalUrl }), secrets: z.object({ apiKey: secret }).default({}) }),
+  radarr: z.object({ config: z.object({ url, publicUrl: optionalUrl }), secrets: z.object({ apiKey: secret }).default({}) }),
+  homeassistant: z.object({
+    config: z.object({
+      url,
+      service: z
+        .string()
+        .trim()
+        .transform((v) => v.replace(/^notify\./, ''))
+        .pipe(z.string().regex(/^[a-z0-9_]{1,100}$/, 'Enter the notify service name, e.g. mobile_app_pixel_8.')),
+    }),
+    secrets: z.object({ token: secret }).default({}),
+  }),
 } as const;
 
 type TestResult = { ok: true; info: Record<string, unknown>; warnings: string[] } | { ok: false; message: string; kind?: string };
@@ -87,10 +103,39 @@ async function testIntegration(ctx: AppContext, provider: ServerIntegration, con
         const warnings = secrets.clientSecret ? [] : ['No Client Secret set. Device sign-in may still work, but Trakt recommends sending it from the server.'];
         return { ok: true, info: {}, warnings };
       }
+      case 'sonarr':
+      case 'radarr': {
+        if (!secrets.apiKey) return { ok: false, message: 'Enter an API key.' };
+        const c = provider === 'sonarr' ? new SonarrClient(String(config.url), secrets.apiKey) : new RadarrClient(String(config.url), secrets.apiKey);
+        const st = await c.status();
+        const expected = provider === 'sonarr' ? 'Sonarr' : 'Radarr';
+        const warnings = st.appName && st.appName !== expected ? [`This looks like ${st.appName}, not ${expected}.`] : [];
+        return { ok: true, info: { applicationName: st.instanceName ?? st.appName ?? expected, version: st.version ?? null }, warnings };
+      }
+      case 'homeassistant': {
+        if (!secrets.token) return { ok: false, message: 'Enter a long-lived access token.' };
+        const c = new HomeAssistantClient(String(config.url), secrets.token, String(config.service));
+        await c.ping();
+        const services = await c.notifyServices().catch(() => null);
+        const warnings = services && !services.includes(String(config.service)) ? [`Home Assistant has no notify.${String(config.service)} service. Check Developer Tools › Actions for the right name.`] : [];
+        return { ok: true, info: { notifyService: `notify.${String(config.service)}` }, warnings };
+      }
     }
   } catch (err) {
     if (err instanceof ProviderError) {
-      if (err.kind === 'auth' || err.kind === 'forbidden') return { ok: false, kind: err.kind, message: provider === 'trakt' ? 'Trakt rejected the Client ID.' : provider === 'tmdb' ? 'TMDb rejected the token. Use the “API Read Access Token”, not the API key.' : err.message };
+      if (err.kind === 'auth' || err.kind === 'forbidden') {
+        const message =
+          provider === 'trakt'
+            ? 'Trakt rejected the Client ID.'
+            : provider === 'tmdb'
+              ? 'TMDb rejected the token. Use the “API Read Access Token”, not the API key.'
+              : provider === 'sonarr' || provider === 'radarr'
+                ? `${provider === 'sonarr' ? 'Sonarr' : 'Radarr'} is reachable, but it rejected the API key. Copy it from Settings › General.`
+                : provider === 'homeassistant'
+                  ? 'Home Assistant rejected the token. Create a long-lived access token in your profile › Security.'
+                  : err.message;
+        return { ok: false, kind: err.kind, message };
+      }
       if (err.kind === 'not_found') return { ok: false, kind: err.kind, message: 'The address responded, but the API was not found. Check the URL (include any base path).' };
       return { ok: false, kind: err.kind, message: err.message };
     }
@@ -115,13 +160,14 @@ export function webhookToken(ctx: AppContext, regenerate = false): string {
 }
 
 export async function integrationRoutes(app: FastifyInstance, { ctx }: AppDeps) {
-  const providerParam = z.object({ provider: z.enum(SERVER_INTEGRATIONS as [ServerIntegration, ...ServerIntegration[]]) });
+  const available = activeIntegrations(ctx.config.janitor);
+  const providerParam = z.object({ provider: z.enum(available as [ServerIntegration, ...ServerIntegration[]]) });
 
   app.get('/integrations', async (req) => {
     const u = requireUser(req);
-    const views = SERVER_INTEGRATIONS.map((p) => ctx.integrations.view(p));
-    if (u.role === 'admin') return { integrations: views };
-    // Non-admins only see whether services work, not their configuration.
+    if (u.role === 'admin') return { integrations: available.map((p) => ctx.integrations.view(p)) };
+    // Non-admins only see whether services work, not their configuration; the Janitor's services are admin tools.
+    const views = available.filter((p) => !JANITOR_INTEGRATIONS.includes(p)).map((p) => ctx.integrations.view(p));
     return { integrations: views.map((v) => ({ provider: v.provider, ready: v.ready, status: v.status, lastOkAt: v.lastOkAt, lastError: v.status === 'error' ? 'The service is currently unavailable.' : null })) };
   });
 

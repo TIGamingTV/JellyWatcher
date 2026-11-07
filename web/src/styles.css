@@ -256,6 +256,7 @@ p { margin: 0 0 0.75em; }
 /* ---------- Form controls ---------- */
 .field { display: grid; gap: 6px; }
 .field-label { font-size: 0.8125rem; font-weight: 600; color: var(--label-2); }
+.field > .segmented { justify-self: start; }
 .field-hint { font-size: 0.8125rem; color: var(--label-2); }
 .field-error { font-size: 0.8125rem; color: var(--red); }
 .input, .select, .textarea {
@@ -477,6 +478,9 @@ dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); display: flex; flex-
 .provider-simkl { background: #0b0f10; }
 .provider-mdblist { background: #e5a00d; color: #111; }
 .provider-local { background: var(--accent-fill); color: var(--on-accent); }
+.provider-sonarr { background: #2a7ab0; }
+.provider-radarr { background: #e8b923; color: #1d1d1f; }
+.provider-homeassistant { background: #18bcf2; color: #0b1f2a; }
 .table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
 .table th { text-align: left; font-weight: 600; color: var(--label-2); font-size: 0.75rem; padding: 10px 16px; border-bottom: 1px solid var(--separator); }
 .table td { padding: 10px 16px; border-bottom: 1px solid var(--separator); vertical-align: top; }

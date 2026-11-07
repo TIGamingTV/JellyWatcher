@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { House, Inbox, Library, ListVideo, LogOut, Plug, Settings as SettingsIcon } from 'lucide-react';
+import { House, Inbox, Library, ListVideo, LogOut, Plug, Recycle, Settings as SettingsIcon } from 'lucide-react';
 import { get, post } from './lib/api';
 import { useAppearance, useMe, useUser } from './lib/session';
 import { CenterLoading } from './components/ui';
@@ -16,6 +16,7 @@ const IntegrationsPage = lazy(() => import('./pages/Integrations').then((m) => (
 const IntegrationDetail = lazy(() => import('./pages/IntegrationDetail').then((m) => ({ default: m.IntegrationDetail })));
 const SourceDetail = lazy(() => import('./pages/IntegrationDetail').then((m) => ({ default: m.SourceDetail })));
 const SettingsPage = lazy(() => import('./pages/Settings').then((m) => ({ default: m.SettingsPage })));
+const JanitorPage = lazy(() => import('./pages/Janitor').then((m) => ({ default: m.JanitorPage })));
 
 export function App() {
   const me = useMe();
@@ -48,6 +49,7 @@ export function App() {
         <Route path="integrations/:provider" element={<IntegrationDetail />} />
         <Route path="integrations/sources/:source" element={<SourceDetail />} />
         <Route path="settings/*" element={<SettingsPage />} />
+        {me.data.user.role === 'admin' && me.data.features?.janitor && <Route path="janitor/*" element={<JanitorPage />} />}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
@@ -62,7 +64,7 @@ const PRIMARY_NAV = [
 ];
 
 function Shell() {
-  const { user, isAdmin } = useUser();
+  const { user, isAdmin, janitor } = useUser();
   const location = useLocation();
   const review = useQuery({ queryKey: ['home'], queryFn: () => get<{ counts: { review: number } }>('/home'), staleTime: 60_000 });
   const reviewCount = review.data?.counts.review ?? 0;
@@ -105,6 +107,12 @@ function Shell() {
           <Plug size={18} aria-hidden />
           Integrations
         </NavLink>
+        {janitor && (
+          <NavLink to="/janitor" className="nav-item">
+            <Recycle size={18} aria-hidden />
+            Janitor
+          </NavLink>
+        )}
         <NavLink to="/settings" className="nav-item">
           <SettingsIcon size={18} aria-hidden />
           Settings
@@ -134,6 +142,11 @@ function Shell() {
           <NavLink to="/integrations" className="icon-btn" aria-label="Integrations">
             <Plug size={20} />
           </NavLink>
+          {janitor && (
+            <NavLink to="/janitor" className="icon-btn" aria-label="Janitor">
+              <Recycle size={20} />
+            </NavLink>
+          )}
           <NavLink to="/settings" className="icon-btn" aria-label="Settings">
             <SettingsIcon size={20} />
           </NavLink>

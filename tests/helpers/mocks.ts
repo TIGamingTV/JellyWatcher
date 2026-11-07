@@ -5,6 +5,10 @@
 
 export const JF = { url: 'http://jellyfin.test:8096', key: 'jf-secret-key' };
 export const SEERR = { url: 'http://seerr.test:5055', key: 'seerr-secret-key' };
+export const SONARR = { url: 'http://sonarr.test:8989', key: 'sonarr-secret-key' };
+export const RADARR = { url: 'http://radarr.test:7878', key: 'radarr-secret-key' };
+export const HA = { url: 'http://ha.test:8123', token: 'ha-long-lived-token', service: 'mobile_app_test' };
+const GB = 1024 ** 3;
 export const ALICE_JF = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
 export const BOB_JF = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
 export const HEAT_JF = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3';
@@ -14,8 +18,8 @@ export const IMDB_HEADER_LIST = 'ls020816782';
 
 export interface MockState {
   jellyfinDown: boolean;
-  seerrRequests: { id: number; status: number; is4k: boolean; media: { id: number; tmdbId: number; mediaType: string; status: number }; requestedBy: { id: number; displayName: string }; seasons: { seasonNumber: number }[] }[];
-  seerrMedia: Map<string, { id: number; tmdbId: number; mediaType: string; status: number }>;
+  seerrRequests: { id: number; status: number; is4k: boolean; media: { id: number; tmdbId: number; tvdbId?: number; mediaType: string; status: number }; requestedBy: { id: number; displayName: string }; seasons: { seasonNumber: number }[]; createdAt?: string }[];
+  seerrMedia: Map<string, { id: number; tmdbId: number; tvdbId?: number; mediaType: string; status: number }>;
   seerrCalls: { method: string; path: string; apiUser: string | null; body?: unknown }[];
   traktCalls: string[];
   imdbCalls: { id: string; after: string | null }[];
@@ -31,6 +35,16 @@ export interface MockState {
   quickConnectApproved: boolean;
   /** API keys created through /Auth/Keys (the guided setup). */
   apiKeys: { AccessToken: string; AppName: string; DateCreated: string }[];
+  /** Sonarr: Severance's status and episode files (id, season, size). */
+  sonarrStatus: 'continuing' | 'ended';
+  sonarrFiles: { id: number; seasonNumber: number; size: number }[];
+  sonarrSeasonMonitored: Record<number, boolean>;
+  sonarrSeriesDeleted: boolean;
+  sonarrCalls: { method: string; path: string; body?: unknown }[];
+  radarrMovies: { id: number; title: string; tmdbId: number; hasFile: boolean; sizeOnDisk: number }[];
+  radarrDown: boolean;
+  radarrCalls: { method: string; path: string }[];
+  haNotifications: { service: string; title: string; message: string; data?: unknown }[];
 }
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -52,6 +66,18 @@ export function createMocks() {
     quickConnectEnabled: true,
     quickConnectApproved: false,
     apiKeys: [],
+    sonarrStatus: 'continuing',
+    sonarrFiles: [
+      ...Array.from({ length: 9 }, (_, i) => ({ id: 100 + i, seasonNumber: 1, size: GB })),
+      ...Array.from({ length: 10 }, (_, i) => ({ id: 200 + i, seasonNumber: 2, size: GB })),
+    ],
+    sonarrSeasonMonitored: { 0: false, 1: true, 2: true },
+    sonarrSeriesDeleted: false,
+    sonarrCalls: [],
+    radarrMovies: [{ id: 7, title: 'Heat', tmdbId: 949, hasFile: true, sizeOnDisk: 20 * GB }],
+    radarrDown: false,
+    radarrCalls: [],
+    haNotifications: [],
   };
   const QC_SECRET = 'qc-secret-0001';
 
@@ -232,6 +258,21 @@ export function createMocks() {
         state.seerrRequests.push(req);
         return json(req, 201);
       }
+      const delReq = p.match(/^\/request\/(\d+)$/);
+      if (delReq && method === 'DELETE') {
+        const i = state.seerrRequests.findIndex((x) => x.id === Number(delReq[1]));
+        if (i < 0) return json({ message: 'not found' }, 404);
+        state.seerrRequests.splice(i, 1);
+        return new Response(null, { status: 204 });
+      }
+      const delMedia = p.match(/^\/media\/(\d+)$/);
+      if (delMedia && method === 'DELETE') {
+        const entry = [...state.seerrMedia.entries()].find(([, m]) => m.id === Number(delMedia[1]));
+        if (!entry) return json({ message: 'not found' }, 404);
+        state.seerrMedia.delete(entry[0]);
+        state.seerrRequests = state.seerrRequests.filter((r) => r.media.id !== entry[1].id);
+        return new Response(null, { status: 204 });
+      }
       const reqMatch = p.match(/^\/request\/(\d+)$/);
       if (reqMatch) {
         const r = state.seerrRequests.find((x) => x.id === Number(reqMatch[1]));
@@ -268,6 +309,90 @@ export function createMocks() {
         });
       }
       return json({ message: 'not found' }, 404);
+    }
+
+    // ---- Sonarr (v3 API)
+    if (url.origin === SONARR.url) {
+      const p = url.pathname.replace('/api/v3', '');
+      state.sonarrCalls.push({ method, path: p + url.search, body });
+      if (headers.get('x-api-key') !== SONARR.key) return json({ message: 'Unauthorized' }, 401);
+      const series = () => {
+        const seasons = [0, 1, 2].map((n) => {
+          const files = state.sonarrFiles.filter((f) => f.seasonNumber === n);
+          const count = n === 0 ? 1 : n === 1 ? 9 : 10;
+          return {
+            seasonNumber: n,
+            monitored: state.sonarrSeasonMonitored[n] ?? false,
+            statistics: { episodeFileCount: files.length, episodeCount: n === 0 ? 0 : count, totalEpisodeCount: count, sizeOnDisk: files.reduce((a, f) => a + f.size, 0), percentOfEpisodes: 100 },
+          };
+        });
+        return {
+          id: 42,
+          title: 'Severance',
+          tvdbId: 371980,
+          tmdbId: 95396,
+          status: state.sonarrStatus,
+          monitored: true,
+          path: '/tv/Severance',
+          qualityProfileId: 1,
+          seasons,
+          statistics: { episodeFileCount: state.sonarrFiles.length, sizeOnDisk: state.sonarrFiles.reduce((a, f) => a + f.size, 0) },
+        };
+      };
+      if (p === '/system/status') return json({ appName: 'Sonarr', instanceName: 'Sonarr', version: '4.0.10' });
+      if (p === '/series' && method === 'GET') return json(state.sonarrSeriesDeleted ? [] : [series()]);
+      if (p === '/series/42') {
+        if (state.sonarrSeriesDeleted) return json({ message: 'NotFound' }, 404);
+        if (method === 'GET') return json(series());
+        if (method === 'PUT') {
+          for (const s of (body as { seasons: { seasonNumber: number; monitored: boolean }[] }).seasons) state.sonarrSeasonMonitored[s.seasonNumber] = s.monitored;
+          return json(series(), 202);
+        }
+        if (method === 'DELETE') {
+          state.sonarrSeriesDeleted = true;
+          state.sonarrFiles = [];
+          return json({});
+        }
+      }
+      if (p === '/episodefile' && method === 'GET') return json(url.searchParams.get('seriesId') === '42' && !state.sonarrSeriesDeleted ? state.sonarrFiles : []);
+      const ef = p.match(/^\/episodefile\/(\d+)$/);
+      if (ef && method === 'DELETE') {
+        const before = state.sonarrFiles.length;
+        state.sonarrFiles = state.sonarrFiles.filter((f) => f.id !== Number(ef[1]));
+        return before === state.sonarrFiles.length ? json({ message: 'NotFound' }, 404) : json({});
+      }
+      return json({ message: 'NotFound' }, 404);
+    }
+
+    // ---- Radarr (v3 API)
+    if (url.origin === RADARR.url) {
+      const p = url.pathname.replace('/api/v3', '');
+      state.radarrCalls.push({ method, path: p + url.search });
+      if (state.radarrDown) return new Response('down', { status: 500 });
+      if (headers.get('x-api-key') !== RADARR.key) return json({ message: 'Unauthorized' }, 401);
+      if (p === '/system/status') return json({ appName: 'Radarr', instanceName: 'Radarr', version: '5.14.0' });
+      if (p === '/movie' && method === 'GET') return json(state.radarrMovies);
+      const mv = p.match(/^\/movie\/(\d+)$/);
+      if (mv && method === 'DELETE') {
+        const before = state.radarrMovies.length;
+        state.radarrMovies = state.radarrMovies.filter((m) => m.id !== Number(mv[1]));
+        return before === state.radarrMovies.length ? json({ message: 'NotFound' }, 404) : json({});
+      }
+      return json({ message: 'NotFound' }, 404);
+    }
+
+    // ---- Home Assistant
+    if (url.origin === HA.url) {
+      if (headers.get('authorization') !== `Bearer ${HA.token}`) return new Response('401: Unauthorized', { status: 401 });
+      if (url.pathname === '/api/') return json({ message: 'API running.' });
+      if (url.pathname === '/api/services') return json([{ domain: 'notify', services: { [HA.service]: {}, persistent_notification: {} } }, { domain: 'light', services: { turn_on: {} } }]);
+      const n = url.pathname.match(/^\/api\/services\/notify\/(\w+)$/);
+      if (n && method === 'POST') {
+        if (n[1] !== HA.service) return json({ message: 'Service not found.' }, 400);
+        state.haNotifications.push({ service: n[1]!, title: body.title, message: body.message, data: body.data });
+        return json([]);
+      }
+      return new Response('', { status: 404 });
     }
 
     // ---- Trakt

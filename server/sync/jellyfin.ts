@@ -7,7 +7,7 @@ import { mapViewing, type ViewingState } from '../../shared/status.js';
 
 /**
  * Indexes the Jellyfin movie/series library and the viewing state of every linked Jellyfin user.
- * Read-only towards Jellyfin. Removed items are only deleted after a complete, successful pass, so a
+ * Read-only towards Jellyfin (the optional Janitor deletes through Sonarr and Radarr, never here). Removed items are only deleted after a complete, successful pass, so a
  * network failure halfway never makes the library look empty.
  */
 export async function syncJellyfin(ctx: AppContext) {
@@ -157,7 +157,8 @@ function recordHistory(ctx: AppContext, jellyfinUserId: string, seen: Map<number
 const EPISODE_SERIES_PER_RUN = 300;
 
 /**
- * Reads episodes of series that appear on someone's list, for season/episode entries and watch time.
+ * Reads episodes of series that appear on someone's list (and, with the Janitor on, requested shows),
+ * for season/episode entries, watch time and the Janitor's season rules.
  * A series is re-read only when its series-level user data changed since the last read.
  */
 async function syncEpisodes(ctx: AppContext, client: JellyfinClient, jellyfinUserId: string): Promise<number> {
@@ -167,9 +168,11 @@ async function syncEpisodes(ctx: AppContext, client: JellyfinClient, jellyfinUse
       `SELECT ji.id, ji.title_id, ji.episode_count, ud.played, ud.unplayed_count, ud.last_played_at, ud.episodes_sig,
               (SELECT COUNT(*) FROM jellyfin_episodes je WHERE je.series_id = ji.id) AS known
          FROM jellyfin_items ji JOIN jellyfin_user_data ud ON ud.item_id = ji.id AND ud.jellyfin_user_id = ?
-        WHERE ji.media_type = 'tv' AND ji.title_id IN (SELECT title_id FROM list_items WHERE title_id IS NOT NULL)`,
+        WHERE ji.media_type = 'tv' AND (ji.title_id IN (SELECT title_id FROM list_items WHERE title_id IS NOT NULL)
+              OR (? = 1 AND ji.title_id IN (SELECT title_id FROM requests WHERE request_status IN (2, 5))))
+        ORDER BY (ji.title_id IN (SELECT title_id FROM requests)) DESC`,
     )
-    .all(jellyfinUserId) as {
+    .all(jellyfinUserId, ctx.config.janitor ? 1 : 0) as {
     id: string;
     title_id: number;
     episode_count: number | null;

@@ -10,6 +10,17 @@ export const SettingsSchema = z.object({
   'auth.jellyfinLogin': z.boolean(),
   'auth.jellyfinAutoCreate': z.boolean(),
   'requests.defaultIs4k': z.boolean(),
+  'janitor.intervalMinutes': z.number().int().min(5).max(1440),
+  /** Kill switch: nothing advances while paused. */
+  'janitor.paused': z.boolean(),
+  /** Deletions (real ones) per run at most. */
+  'janitor.maxActionsPerRun': z.number().int().min(1).max(500),
+  /** Deletions only run between these local times (HH:MM); both empty: any time. */
+  'janitor.windowStart': z.union([z.literal(''), z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)]),
+  'janitor.windowEnd': z.union([z.literal(''), z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)]),
+  'janitor.notifyDone': z.boolean(),
+  'janitor.notifyFailed': z.boolean(),
+  'janitor.notifyApproval': z.boolean(),
 });
 export type AppSettings = z.infer<typeof SettingsSchema>;
 
@@ -21,6 +32,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   'auth.jellyfinLogin': true,
   'auth.jellyfinAutoCreate': false,
   'requests.defaultIs4k': false,
+  'janitor.intervalMinutes': 60,
+  'janitor.paused': false,
+  'janitor.maxActionsPerRun': 5,
+  'janitor.windowStart': '',
+  'janitor.windowEnd': '',
+  'janitor.notifyDone': true,
+  'janitor.notifyFailed': true,
+  'janitor.notifyApproval': true,
 };
 
 export class SettingsStore {

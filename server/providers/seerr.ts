@@ -7,6 +7,7 @@ import type { MatchCandidate, MediaType } from '../domain/matching.js';
  * Seerr (Overseerr / Jellyseerr compatible) API adapter. Verified against seerr-team/seerr v3.5:
  *  - base {url}/api/v1, header X-Api-Key; X-API-User acts on behalf of another Seerr user
  *  - POST /request: 201 created, 202 no seasons available, 403 permission/quota/blocklist, 409 duplicate
+ *  - DELETE /request/{id}, DELETE /media/{id}: 204 (Janitor only)
  */
 
 const MediaInfo = z.object({
@@ -265,6 +266,18 @@ export class SeerrClient {
       if (err instanceof ProviderError && err.kind === 'not_found') return null;
       throw err;
     }
+  }
+
+  /** Deletes a request (Janitor). False when it was already gone. */
+  async deleteRequest(id: number): Promise<boolean> {
+    const res = await this.http.delete(`/request/${id}`, undefined, { acceptStatus: [404] });
+    return res.status !== 404;
+  }
+
+  /** Removes a media item with its requests and status, so it can be requested again (Janitor). */
+  async deleteMedia(mediaId: number): Promise<boolean> {
+    const res = await this.http.delete(`/media/${mediaId}`, undefined, { acceptStatus: [404] });
+    return res.status !== 404;
   }
 
   /** Most recently modified requests first. */

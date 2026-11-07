@@ -22,6 +22,7 @@ import { imageRoutes } from './routes/images.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { watchRoutes } from './routes/watch.js';
 import { pluginRoutes } from './routes/plugin.js';
+import { janitorRoutes } from './routes/janitor.js';
 
 export interface AppDeps {
   ctx: AppContext;
@@ -118,6 +119,7 @@ export async function buildApp(ctx: AppContext, opts: { setupCode: () => string 
     await webhookRoutes(api, deps);
     await watchRoutes(api, deps);
     await pluginRoutes(api, deps);
+    await janitorRoutes(api, deps);
   }, { prefix: '/api' });
 
   app.setNotFoundHandler((req, reply) => {
