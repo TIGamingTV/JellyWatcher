@@ -31,6 +31,8 @@ export interface EvaluationRow {
   eligibleAt: string | null;
   sizeBytes: number | null;
   candidateId: number | null;
+  /** Nothing to show or clean up: gone from Jellyfin and Sonarr/Radarr, or a season the request moved past. */
+  hidden?: boolean;
 }
 
 /** Reads Sonarr and Radarr once, only when a rule needs them. */
@@ -98,7 +100,7 @@ interface Judged {
 }
 
 /** Judges one rule's units. `claimed` holds titles an earlier rule already handles. */
-function judgeRule(ctx: AppContext, rule: JanitorRule, units: Unit[], exclusions: Map<number, ExclusionRow[]>, claimed: Set<number>, now: Date): Judged[] {
+function judgeRule(ctx: AppContext, rule: JanitorRule, units: Unit[], arr: ArrSnapshot, exclusions: Map<number, ExclusionRow[]>, claimed: Set<number>, now: Date): Judged[] {
   const people = linkedPeople(ctx);
   const out: Judged[] = [];
   for (const unit of units) {
@@ -145,7 +147,16 @@ function judgeRule(ctx: AppContext, rule: JanitorRule, units: Unit[], exclusions
     if (!unit.inLibrary) {
       row.status = 'not_in_library';
       const later = unit.kind === 'season' ? Math.max(-1, ...requests.flatMap((r) => r.seasons)) : -1;
-      row.reason = unit.kind === 'movie' ? 'Not in Jellyfin.' : later > unit.season ? `No longer in Jellyfin; the request continues with season ${later}.` : 'No episodes of it are in Jellyfin.';
+      // Deleted from Radarr/Sonarr too (by hand, or by Seerr): nothing left to clean up.
+      const gone = unit.kind === 'movie' ? arr.radarr !== null && unit.radarrId === null : arr.sonarr !== null && unit.sonarrId === null;
+      row.hidden = gone || later > unit.season;
+      row.reason = gone
+        ? `Gone from Jellyfin and ${unit.kind === 'movie' ? 'Radarr' : 'Sonarr'}.`
+        : unit.kind === 'movie'
+          ? 'Not in Jellyfin.'
+          : later > unit.season
+            ? `No longer in Jellyfin; the request continues with season ${later}.`
+            : 'No episodes of it are in Jellyfin.';
       continue;
     }
     if (unit.incomplete) {
@@ -177,7 +188,8 @@ export async function previewRules(ctx: AppContext, rules: JanitorRule[], now = 
   const rows: EvaluationRow[] = [];
   for (const rule of rules) {
     if (!cache.has(rule.unit)) cache.set(rule.unit, buildUnits(ctx, rule.unit, arr));
-    for (const j of judgeRule(ctx, rule, cache.get(rule.unit)!, exclusions, claimed, now)) {
+    for (const j of judgeRule(ctx, rule, cache.get(rule.unit)!, arr, exclusions, claimed, now)) {
+      if (j.row.hidden) continue;
       j.row.candidateId = store.candidateFor(rule.id, j.unit.titleId, j.unit.season)?.id ?? null;
       rows.push(j.row);
     }
@@ -250,7 +262,7 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
   const arrFailed = (rule: JanitorRule) => (rule.mediaType === 'tv' ? ctx.integrations.isReady('sonarr') && !arr.sonarr : ctx.integrations.isReady('radarr') && !arr.radarr);
   for (const rule of rules) {
     if (!cache.has(rule.unit)) cache.set(rule.unit, buildUnits(ctx, rule.unit, arr));
-    const judged = judgeRule(ctx, rule, cache.get(rule.unit)!, exclusions, claimed, now);
+    const judged = judgeRule(ctx, rule, cache.get(rule.unit)!, arr, exclusions, claimed, now);
     stats.units += judged.length;
     for (const { row, unit, context } of judged) {
       if (rule.unit === 'season' && rule.nextSeason.enabled && row.status !== 'claimed' && unit.next) nextSeasonUnits.push({ rule, unit });

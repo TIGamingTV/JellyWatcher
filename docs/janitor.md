@@ -43,6 +43,10 @@ or Radarr yourself, or that is only in Jellyfin, is never touched. The one addit
 
 Each request belongs to the **first turned-on rule that matches it**, from the top of the Rules page.
 
+Titles deleted outside the Janitor are left out: a request deleted in Seerr no longer counts (each
+Seerr sync checks every request), and a movie or show gone from both Jellyfin and Radarr/Sonarr has
+nothing left to clean up, so the preview does not list it.
+
 A rule handles one of:
 
 | Handles | Unit | Ready when |
@@ -102,9 +106,8 @@ season is in Jellyfin or monitored).
 seasons in Sonarr themselves and is now on season 4) is caught up on the next run: every season after
 their request that is in Jellyfin or monitored in Sonarr joins their request, once they watched
 anything after the requested seasons or those seasons are gone from Jellyfin and Sonarr. This only
-changes JellyWatcher's bookkeeping (Sonarr is not touched), so it happens in dry run too. Requested
-seasons that are gone show as *No longer in Jellyfin; the request continues with season N* in the
-preview.
+changes JellyWatcher's bookkeeping (Sonarr is not touched), so it happens in dry run too. Seasons a
+request has moved past and that are gone from Jellyfin are no longer listed in the preview.
 
 It happens once per season and is logged (*Monitor the next season*). It is not a deletion: it runs in
 *Ask first* and *Automatic* mode without approval and outside the deletion window, and stops while
