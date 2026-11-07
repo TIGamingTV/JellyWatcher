@@ -45,6 +45,10 @@ interface CandidateView {
   dryRun: boolean;
   acted: boolean;
   approvedAt: string | null;
+  /** Will stop for approval; can be approved ahead of time. */
+  needsApproval: boolean;
+  /** A notification already asked for the approval. */
+  approvalAsked: boolean;
   attempts: number;
   lastError: string | null;
   requesters: string[];
@@ -248,7 +252,8 @@ function Overview() {
     }
   };
 
-  const approval = d.candidates.filter((c) => c.state === 'awaiting_approval');
+  // Waiting at the deletion, or already announced: approving now lets it run on schedule.
+  const approval = d.candidates.filter((c) => c.state === 'awaiting_approval' || (c.needsApproval && c.approvalAsked));
   const failed = d.candidates.filter((c) => c.state === 'failed' || (c.state === 'waiting' && c.lastError && !c.parked));
   const upcoming = d.candidates.filter((c) => !approval.includes(c) && !failed.includes(c));
   const missing = [!d.services.jellyfin && 'Jellyfin', !d.services.seerr && 'Seerr', !d.services.sonarr && 'Sonarr', !d.services.radarr && 'Radarr'].filter(Boolean) as string[];
@@ -347,6 +352,11 @@ function Overview() {
         ) : (
           upcoming.map((c) => (
             <CandidateRow key={c.id} c={c}>
+              {c.needsApproval && (
+                <button className="btn btn-small btn-gray" onClick={() => act(c, 'approve')}>
+                  <Check size={14} aria-hidden /> Approve
+                </button>
+              )}
               <button className="btn btn-small" onClick={() => setKeep(c)}>
                 <ShieldCheck size={14} aria-hidden /> Keep
               </button>
@@ -373,7 +383,7 @@ function CandidateRow({ c, children }: { c: CandidateView; children: ReactNode }
       : c.parked
         ? c.parked
         : c.dueAt
-          ? `${c.dryRun ? 'Would be deleted' : 'Deleted'} ${dateTime(c.dueAt)}`
+          ? `${c.dryRun ? 'Would be deleted' : 'Deleted'} ${dateTime(c.dueAt)}${c.needsApproval ? ' once you approve it' : c.approvedAt ? ' · approved' : ''}`
           : c.nextRunAt
             ? `Next: ${c.nextStep ?? 'step'} · ${dateTime(c.nextRunAt)}`
             : c.nextStep

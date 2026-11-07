@@ -221,13 +221,16 @@ describe('Janitor (JW_JANITOR=1) against mocked Seerr, Jellyfin, Sonarr, Radarr 
     await run(0); // season 1 was finished long ago: the first wait is over, the notice goes out
     let [s1] = await sev();
     expect(s1).toMatchObject({ season: 1, state: 'waiting', nextStep: 'Wait', label: 'Severance · Season 1' });
-    expect(mocks.state.haNotifications.at(-1)!.message).toMatch(/^Severance · Season 1 will be deleted on /);
+    // One message: the warning asks for the approval too.
+    expect(mocks.state.haNotifications.at(-1)!.message).toMatch(/^Severance · Season 1 will be deleted on .+\. Approve or keep it in JellyWatcher\.$/);
+    expect(s1).toMatchObject({ needsApproval: true, approvalAsked: true });
     expect(await sev()).toHaveLength(1);
+    const sent = mocks.state.haNotifications.length;
 
     await run(3.1);
     [s1] = await sev();
     expect(s1.state).toBe('awaiting_approval');
-    expect(mocks.state.haNotifications.at(-1)!.title).toBe('Janitor: approval needed');
+    expect(mocks.state.haNotifications).toHaveLength(sent); // no second "approval needed"
     expect(mocks.state.sonarrFiles.filter((f) => f.seasonNumber === 1)).toHaveLength(9);
     expect((await admin.get('/api/home')).data.attention.some((a: any) => a.kind === 'janitor')).toBe(true);
 
@@ -250,12 +253,16 @@ describe('Janitor (JW_JANITOR=1) against mocked Seerr, Jellyfin, Sonarr, Radarr 
     [s1] = (await sev()).filter((c) => c.season === 1);
     expect(s1).toMatchObject({ state: 'done' }); // ended, but season 2 still has files: stop here
 
+    // Approved right after the warning: it runs on schedule without stopping.
     await run(8);
-    await run(11.1);
     s2 = (await sev()).find((c) => c.season === 2);
-    expect(s2.state).toBe('awaiting_approval');
-    await admin.post(`/api/admin/janitor/candidates/${s2.id}/approve`);
+    expect(s2).toMatchObject({ state: 'waiting', needsApproval: true, approvalAsked: true });
+    expect((await admin.post(`/api/admin/janitor/candidates/${s2.id}/approve`)).status).toBe(200);
     await settle(ctx);
+    s2 = (await sev()).find((c) => c.season === 2);
+    expect(s2).toMatchObject({ state: 'waiting', needsApproval: false });
+    expect(s2.approvedAt).toBeTruthy();
+    await run(11.1);
     s2 = (await sev()).find((c) => c.season === 2);
     expect(s2).toMatchObject({ state: 'done', acted: true });
     expect(mocks.state.sonarrSeriesDeleted).toBe(true);

@@ -5,7 +5,7 @@ import type { AppContext } from '../context.js';
 import { nowIso, parseJson } from '../db/index.js';
 import { ApiError } from '../http/errors.js';
 import { IdParam, parse } from '../http/validate.js';
-import { previewRules } from '../janitor/engine.js';
+import { approvalAhead, previewRules } from '../janitor/engine.js';
 import { notifyAdmin } from '../janitor/notify.js';
 import { RuleInputSchema } from '../janitor/schema.js';
 import { JanitorStore, type CandidateContext, type CandidateRow } from '../janitor/store.js';
@@ -55,6 +55,9 @@ export function candidateView(ctx: AppContext, c: CandidateRow, rules: Map<numbe
     dryRun: c.dry_run === 1,
     acted: c.acted === 1,
     approvedAt: c.approved_at,
+    /** Will stop for approval; can be approved ahead of time. */
+    needsApproval: c.state === 'awaiting_approval' || (rule ? c.state === 'waiting' && approvalAhead(rule, c, c.step_index) : false),
+    approvalAsked: ctxt.approvalAsked ?? false,
     attempts: c.attempts,
     lastError: c.last_error,
     requesters: ctxt.requesters ?? [],
@@ -223,10 +226,15 @@ export async function janitorRoutes(app: FastifyInstance, { ctx }: AppDeps) {
     requireAdmin(req);
     const { id } = parse(IdParam, req.params);
     const c = candidateOr404(id);
-    if (c.state !== 'awaiting_approval') throw new ApiError(409, 'not_waiting', 'This cleanup is not waiting for approval.');
+    const rule = store.rule(c.rule_id);
+    // Approving ahead of time: it then runs on schedule without stopping.
+    const early = c.state === 'waiting' && rule !== null && approvalAhead(rule, c, c.step_index);
+    if (c.state !== 'awaiting_approval' && !early) throw new ApiError(409, 'not_waiting', 'This cleanup is not waiting for approval.');
     c.approved_at = nowIso();
-    c.state = 'waiting';
-    c.next_run_at = nowIso();
+    if (!early) {
+      c.state = 'waiting';
+      c.next_run_at = nowIso();
+    }
     store.saveCandidate(c);
     const ctxt = parseJson<CandidateContext>(c.context, {});
     store.log({ candidateId: c.id, ruleId: c.rule_id, ruleName: store.rule(c.rule_id)?.name, titleId: c.title_id, title: ctxt.title ?? `Title ${c.title_id}`, season: c.season, step: 'approval', outcome: 'info', message: `Approved by ${req.user!.displayName}.` });

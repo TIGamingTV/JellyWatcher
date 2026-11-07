@@ -28,6 +28,8 @@ export interface CandidateContext {
   /** Date shown in notifications and the overview: when the next deletion is due. */
   dueAt?: string | null;
   freedBytes?: number;
+  /** A notification already asked for approval (the warning before the deletion). */
+  approvalAsked?: boolean;
   /** Why it is parked at a gate that is checked again every day. */
   parked?: string | null;
 }
