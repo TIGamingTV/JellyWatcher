@@ -144,7 +144,8 @@ function judgeRule(ctx: AppContext, rule: JanitorRule, units: Unit[], exclusions
     }
     if (!unit.inLibrary) {
       row.status = 'not_in_library';
-      row.reason = unit.kind === 'movie' ? 'Not in Jellyfin.' : 'No episodes of it are in Jellyfin.';
+      const later = unit.kind === 'season' ? Math.max(-1, ...requests.flatMap((r) => r.seasons)) : -1;
+      row.reason = unit.kind === 'movie' ? 'Not in Jellyfin.' : later > unit.season ? `No longer in Jellyfin; the request continues with season ${later}.` : 'No episodes of it are in Jellyfin.';
       continue;
     }
     if (unit.incomplete) {
@@ -243,6 +244,8 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
   const seen = new Set<number>();
   const nowIsoStr = now.toISOString();
   const nextSeasonUnits: { rule: JanitorRule; unit: Unit }[] = [];
+  // Requesters already past the seasons they asked for: those seasons join their request first.
+  stats.nextSeasons += catchUp(ctx, store, rules, arr, now);
   // Without Sonarr data for shows (or Radarr for movies) the evaluation would be incomplete; keep what exists.
   const arrFailed = (rule: JanitorRule) => (rule.mediaType === 'tv' ? ctx.integrations.isReady('sonarr') && !arr.sonarr : ctx.integrations.isReady('radarr') && !arr.radarr);
   for (const rule of rules) {
@@ -500,6 +503,63 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
 }
 
 /**
+ * Seasons a requester moved on to before the next-season option (or the Janitor) followed them,
+ * e.g. by monitoring them in Sonarr by hand: a request for season 1 while they watch season 4. For
+ * season rules with the option on, every later season that is in Jellyfin or monitored in Sonarr
+ * joins the request of a requester who watched anything after their requested seasons, or whose
+ * requested seasons are gone from Jellyfin and Sonarr. Bookkeeping
+ * only (Sonarr is not touched), so dry runs do it too. Returns how many seasons were added.
+ */
+function catchUp(ctx: AppContext, store: JanitorStore, rules: JanitorRule[], arr: ArrSnapshot, now: Date): number {
+  const seasonRules = rules.filter((r) => r.unit === 'season');
+  if (!seasonRules.some((r) => r.nextSeason.enabled)) return 0;
+  const units = buildUnits(ctx, 'season', arr);
+  const byTitle = new Map<number, Unit[]>();
+  for (const u of units) byTitle.set(u.titleId, [...(byTitle.get(u.titleId) ?? []), u]);
+  const lastWatched = ctx.db.prepare(
+    `SELECT MAX(season) AS s FROM (SELECT season FROM watched_episodes WHERE user_id = ? AND title_id = ? UNION ALL SELECT season FROM manual_watches WHERE user_id = ? AND title_id = ? AND season > 0)`,
+  );
+  const claimed = new Set<number>();
+  let added = 0;
+  // Season units only reach rules of the same kind, so only those claim titles here.
+  for (const rule of seasonRules) {
+    for (const [titleId, list] of byTitle) {
+      if (claimed.has(titleId) || !list.some((u) => matches(rule, u))) continue;
+      claimed.add(titleId);
+      if (!rule.nextSeason.enabled) continue;
+      const unit = list[0]!;
+      const present = unit.presentSeasons;
+      const requests = [...new Map(list.flatMap((u) => ruleRequests(rule, u)).map((r) => [r.id, r])).values()];
+      for (const r of requests) {
+        if (r.userId === null || r.seasons.length === 0) continue;
+        const max = Math.max(...r.seasons);
+        const seasons = present.filter((s) => s > max);
+        if (!seasons.length) continue;
+        // They moved on: watched something after the requested seasons, or those are gone already.
+        const watched = (lastWatched.get(r.userId, titleId, r.userId, titleId) as { s: number | null }).s;
+        if (!((watched !== null && watched > max) || r.seasons.every((s) => !present.includes(s)))) continue;
+        const name = personName(ctx, r.userId) ?? r.requestedBy ?? 'someone';
+        for (const season of seasons) store.addSeason({ requestIds: [r.id], season, titleId, ruleId: rule.id, monitored: false, now: now.toISOString() });
+        added += seasons.length;
+        const list2 = seasons.length === 1 ? `season ${seasons[0]}` : `seasons ${seasons.slice(0, -1).join(', ')} and ${seasons.at(-1)}`;
+        store.log({
+          ruleId: rule.id,
+          ruleName: rule.name,
+          titleId,
+          title: unit.title,
+          season: seasons[0]!,
+          step: 'next_season',
+          outcome: 'ok',
+          message: `${name} requested ${r.seasons.length === 1 ? `season ${r.seasons[0]}` : `seasons ${r.seasons.join(', ')}`}, but the show has moved on: ${list2} now ${seasons.length === 1 ? 'counts' : 'count'} as requested by ${name}.`,
+          at: now.toISOString(),
+        });
+      }
+    }
+  }
+  return added;
+}
+
+/**
  * The next-season option for one season unit: requesters with at most `episodesLeft` episodes of it
  * to go get the next season added to their request, and Sonarr monitors it (and searches for it)
  * unless it already does. Returns whether a season was added.
@@ -508,15 +568,21 @@ async function nextSeason(ctx: AppContext, store: JanitorStore, rule: JanitorRul
   const next = unit.next!;
   const opt = rule.nextSeason;
   const triggered: { name: string; left: number; requests: UnitRequest[] }[] = [];
+  // The show is already past that season (a later one is here): never bring an old one back.
+  if (unit.presentSeasons.some((s) => s > next.season)) return false;
   const requests = ruleRequests(rule, unit);
+  const seenNext = ctx.db.prepare('SELECT 1 FROM watched_episodes WHERE user_id = ? AND title_id = ? AND season = ? LIMIT 1');
   for (const userId of new Set(requests.map((r) => r.userId).filter((id): id is number => id !== null))) {
-    // Only requests listing seasons can miss one; a request for the whole show already has it.
-    const missing = requests.filter((r) => r.userId === userId && r.seasons.length > 0 && !r.seasons.includes(next.season));
+    // Only requests listing seasons can miss one; a request for the whole show already has it. Only
+    // the season after the last one of the request: never an earlier one they already moved past.
+    const missing = requests.filter((r) => r.userId === userId && r.seasons.length > 0 && next.season > Math.max(...r.seasons));
     if (!missing.length) continue;
     const name = personName(ctx, userId);
     if (!name) continue;
     const p = progressFor(ctx, { id: userId, name }, unit);
     if (p.left === null || p.left === undefined || p.left > opt.episodesLeft || !p.watched) continue;
+    // Watched some of the next season already (deleted since): it is behind them.
+    if (!next.monitored && seenNext.get(userId, unit.titleId, next.season)) continue;
     triggered.push({ name, left: p.left, requests: missing });
   }
   if (!triggered.length) return false;

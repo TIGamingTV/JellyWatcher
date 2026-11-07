@@ -4,7 +4,7 @@ import { inWindow, runJanitor } from '../server/janitor/engine';
 import { syncJellyfin } from '../server/sync/jellyfin';
 import { syncSeerr } from '../server/sync/seerr';
 import { Client, SETUP_CODE, settle, testApp } from './helpers/app';
-import { BOB_JF, HA, JF, RADARR, SEERR, SONARR, createMocks } from './helpers/mocks';
+import { BOB_JF, HA, JF, RADARR, SEERR, SONARR, createMocks, sevEpisode } from './helpers/mocks';
 
 const DAY = 86400_000;
 
@@ -413,6 +413,97 @@ describe('Janitor next season: a request for season 1 follows the requester to s
     expect((await sev()).find((c) => c.season === 2)).toMatchObject({ state: 'done', acted: true });
     expect(mocks.state.sonarrSeriesDeleted).toBe(true);
     expect(mocks.state.seerrCalls.filter((x) => x.method === 'DELETE').map((x) => x.path)).toEqual(['/request/601']);
+  });
+});
+
+describe('Janitor next season: catching up with a requester who moved on by hand', () => {
+  const mocks = createMocks();
+  let t: Awaited<ReturnType<typeof testApp>>;
+  let ctx: AppContext;
+  let admin: Client;
+  const T0 = Date.now();
+  const at = (days: number) => new Date(T0 + days * DAY);
+  const run = async (days: number) => {
+    const r = await runJanitor(ctx, { now: at(days) });
+    await settle(ctx);
+    return r;
+  };
+  const nextLog = async () => ((await admin.get('/api/admin/janitor/log')).data.entries as any[]).filter((e) => e.step === 'next_season').reverse();
+  let sevId: number;
+  let adminId: number;
+  let rule: any;
+
+  beforeAll(async () => {
+    vi.stubGlobal('fetch', mocks.fetch);
+    t = await testApp({ JW_JANITOR: '1' });
+    ctx = t.ctx;
+    admin = new Client(t.app);
+    await admin.post('/api/setup', { setupCode: SETUP_CODE, username: 'admin', password: 'a-long-password', displayName: 'Alice' });
+    adminId = (await admin.get('/api/auth/me')).data.user.id;
+    await admin.put('/api/integrations/jellyfin', { config: { url: JF.url }, secrets: { apiKey: JF.key } });
+    await admin.put('/api/integrations/seerr', { config: { url: SEERR.url }, secrets: { apiKey: SEERR.key } });
+    await admin.put('/api/integrations/sonarr', { config: { url: SONARR.url }, secrets: { apiKey: SONARR.key } });
+    await admin.post('/api/connections/jellyfin', { username: 'alice', password: 'alicepw' });
+    await settle(ctx);
+    // Season 1 was requested; seasons 1 and 2 were watched, unmonitored and deleted by hand (before
+    // the Janitor ran, so it never saw them played). Alice is at episode 6 of 8 of season 3.
+    mocks.state.sonarrSeasonCounts = { 0: 1, 1: 9, 2: 10, 3: 8, 4: 8 };
+    mocks.state.sonarrSeasonMonitored = { 0: false, 1: false, 2: false, 3: true, 4: false };
+    mocks.state.sonarrFiles = Array.from({ length: 8 }, (_, i) => ({ id: 400 + i, seasonNumber: 3, size: 1024 ** 3 }));
+    mocks.state.sevEpisodes = Array.from({ length: 8 }, (_, i) => sevEpisode(3, i + 1, i < 6));
+    mocks.state.seerrMedia.set('tv:95396', { id: 2, tmdbId: 95396, tvdbId: 371980, mediaType: 'tv', status: 4 });
+    mocks.state.seerrRequests.push({ id: 801, status: 2, is4k: false, media: { id: 2, tmdbId: 95396, tvdbId: 371980, mediaType: 'tv', status: 4 }, requestedBy: { id: 1, displayName: 'Admin' }, seasons: [{ seasonNumber: 1 }], createdAt: '2026-08-01T00:00:00.000Z' });
+    await syncJellyfin(ctx);
+    await syncSeerr(ctx);
+    await syncJellyfin(ctx);
+    sevId = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 95396').get() as { id: number }).id;
+    rule = (await admin.post('/api/admin/janitor/templates/tv_season')).data.rule;
+  });
+  afterAll(async () => {
+    await settle(ctx);
+    await t.close();
+    vi.unstubAllGlobals();
+  });
+
+  it('adds the season they are on to the request, then monitors the one after it, never an old one', async () => {
+    rule = (await admin.put(`/api/admin/janitor/rules/${rule.id}`, { ...rule, enabled: true, mode: 'auto' })).data.rule;
+    await settle(ctx);
+    await run(0);
+    const entries = await nextLog();
+    expect(entries.map((e) => [e.season, e.outcome, e.message])).toEqual([
+      [3, 'ok', 'Alice requested season 1, but the show has moved on: season 3 now counts as requested by Alice.'],
+      [4, 'ok', 'Alice has 2 episodes of season 3 left: monitored season 4 in Sonarr and searched for it. It now counts as requested by Alice.'],
+    ]);
+    // Seasons already watched and deleted stay that way.
+    expect(mocks.state.sonarrSeasonMonitored).toMatchObject({ 1: false, 2: false, 3: true, 4: true });
+    expect(mocks.state.sonarrCalls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([{ name: 'SeasonSearch', seriesId: 42, seasonNumber: 4 }]);
+    // Nothing more on later runs.
+    await run(0.1);
+    expect(await nextLog()).toHaveLength(2);
+
+    const rows = (await admin.post('/api/admin/janitor/preview', {})).data.rows.filter((r: any) => r.titleId === sevId);
+    expect(rows.map((r: any) => [r.season, r.status])).toEqual([
+      [1, 'not_in_library'],
+      [3, 'waiting'],
+      [4, 'not_in_library'],
+    ]);
+    expect(rows[0].reason).toBe('No longer in Jellyfin; the request continues with season 4.');
+    expect(rows[1]).toMatchObject({ requesters: ['Alice'], reason: 'Waiting for Alice to finish it.' });
+  });
+
+  it('cleans up the season they are on and keeps the show for the next one', async () => {
+    mocks.state.sonarrStatus = 'ended';
+    ctx.watches.mark(adminId, sevId, { season: 3 }, new Date(T0).toISOString());
+    await run(0.2);
+    await run(8);
+    await run(11.1);
+    const s3 = ((await admin.get('/api/admin/janitor/candidates')).data.candidates as any[]).find((c) => c.titleId === sevId && c.season === 3);
+    expect(s3).toMatchObject({ state: 'done', acted: true });
+    expect(mocks.state.sonarrFiles).toHaveLength(0);
+    expect(mocks.state.sonarrSeasonMonitored[3]).toBe(false);
+    // Season 4 is still to come: the show and the request stay.
+    expect(mocks.state.sonarrSeriesDeleted).toBe(false);
+    expect(mocks.state.seerrCalls.filter((x) => x.method === 'DELETE')).toHaveLength(0);
   });
 });
 

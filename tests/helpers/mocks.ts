@@ -39,6 +39,10 @@ export interface MockState {
   sonarrStatus: 'continuing' | 'ended';
   sonarrFiles: { id: number; seasonNumber: number; size: number }[];
   sonarrSeasonMonitored: Record<number, boolean>;
+  /** Sonarr: episodes per season of Severance (season 0 included). */
+  sonarrSeasonCounts: Record<number, number>;
+  /** Jellyfin: Severance's episodes (Alice's view; others see nothing played). */
+  sevEpisodes: ReturnType<typeof sevEpisode>[];
   sonarrSeriesDeleted: boolean;
   sonarrCalls: { method: string; path: string; body?: unknown }[];
   radarrMovies: { id: number; title: string; tmdbId: number; hasFile: boolean; sizeOnDisk: number }[];
@@ -49,6 +53,21 @@ export interface MockState {
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', ...headers } });
+
+/** A Jellyfin episode of Severance as Alice sees it. */
+export function sevEpisode(s: number, e: number, played: boolean) {
+  return {
+    Id: `e${s}${String(e).padStart(2, '0')}`.padEnd(32, '0'),
+    Name: `Episode ${e}`,
+    Type: 'Episode',
+    SeriesId: SEV_JF,
+    ParentIndexNumber: s,
+    IndexNumber: e,
+    RunTimeTicks: 50 * 600_000_000,
+    LocationType: 'FileSystem',
+    UserData: { Played: played, LastPlayedDate: played ? '2026-09-01T00:00:00Z' : null },
+  };
+}
 
 export function createMocks() {
   const state: MockState = {
@@ -72,6 +91,9 @@ export function createMocks() {
       ...Array.from({ length: 10 }, (_, i) => ({ id: 200 + i, seasonNumber: 2, size: GB })),
     ],
     sonarrSeasonMonitored: { 0: false, 1: true, 2: true },
+    sonarrSeasonCounts: { 0: 1, 1: 9, 2: 10 },
+    // Severance: season 1 (9 episodes, all watched) and season 2 (10 episodes, none watched).
+    sevEpisodes: [...Array.from({ length: 9 }, (_, i) => sevEpisode(1, i + 1, true)), ...Array.from({ length: 10 }, (_, i) => sevEpisode(2, i + 1, false))],
     sonarrSeriesDeleted: false,
     sonarrCalls: [],
     radarrMovies: [{ id: 7, title: 'Heat', tmdbId: 949, hasFile: true, sizeOnDisk: 20 * GB }],
@@ -85,21 +107,6 @@ export function createMocks() {
     { Id: HEAT_JF, Name: 'Heat', ServerId: 'srv1', Type: 'Movie', ProductionYear: 1995, ProviderIds: { Tmdb: '949', Imdb: 'tt0113277' }, ImageTags: { Primary: 'p1' }, DateCreated: '2026-10-01T00:00:00Z', RunTimeTicks: 170 * 600_000_000 },
     { Id: SEV_JF, Name: 'Severance', ServerId: 'srv1', Type: 'Series', ProductionYear: 2022, ProviderIds: { Tmdb: '95396', Tvdb: '371980' }, RecursiveItemCount: 19, DateCreated: '2026-10-02T00:00:00Z' },
   ];
-  // Severance: season 1 (9 episodes, all watched) and season 2 (10 episodes, none watched).
-  const sevEpisodes = [
-    ...Array.from({ length: 9 }, (_, i) => ({ s: 1, e: i + 1, played: true })),
-    ...Array.from({ length: 10 }, (_, i) => ({ s: 2, e: i + 1, played: false })),
-  ].map((x) => ({
-    Id: `e${x.s}${String(x.e).padStart(2, '0')}`.padEnd(32, '0'),
-    Name: `Episode ${x.e}`,
-    Type: 'Episode',
-    SeriesId: SEV_JF,
-    ParentIndexNumber: x.s,
-    IndexNumber: x.e,
-    RunTimeTicks: 50 * 600_000_000,
-    LocationType: 'FileSystem',
-    UserData: { Played: x.played, LastPlayedDate: x.played ? '2026-09-01T00:00:00Z' : null },
-  }));
   const userData: Record<string, Record<string, unknown>> = {
     [HEAT_JF]: { Played: true, PlayCount: 1, PlayedPercentage: 100 },
     [SEV_JF]: { Played: false, UnplayedItemCount: 10, PlayedPercentage: 47 },
@@ -203,7 +210,7 @@ export function createMocks() {
         case `/Shows/${SEV_JF}/Episodes`: {
           if (!authed) return new Response('', { status: 401 });
           const uid = url.searchParams.get('userId');
-          return json({ Items: sevEpisodes.map((e) => (uid === ALICE_JF ? e : { ...e, UserData: { Played: false } })), TotalRecordCount: sevEpisodes.length });
+          return json({ Items: state.sevEpisodes.map((e) => (uid === ALICE_JF ? e : { ...e, UserData: { Played: false } })), TotalRecordCount: state.sevEpisodes.length });
         }
         case '/UserItems/Resume':
           return json({ Items: [], TotalRecordCount: 0 });
@@ -317,9 +324,9 @@ export function createMocks() {
       state.sonarrCalls.push({ method, path: p + url.search, body });
       if (headers.get('x-api-key') !== SONARR.key) return json({ message: 'Unauthorized' }, 401);
       const series = () => {
-        const seasons = [0, 1, 2].map((n) => {
+        const seasons = Object.keys(state.sonarrSeasonCounts).map(Number).map((n) => {
           const files = state.sonarrFiles.filter((f) => f.seasonNumber === n);
-          const count = n === 0 ? 1 : n === 1 ? 9 : 10;
+          const count = state.sonarrSeasonCounts[n]!;
           return {
             seasonNumber: n,
             monitored: state.sonarrSeasonMonitored[n] ?? false,
