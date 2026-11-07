@@ -33,26 +33,32 @@ export async function syncSeerr(ctx: AppContext) {
       return 0;
     });
 
-    const requests = await client.requests();
-    const seen = new Set<number>();
+    const { requests, ids: seen, complete } = await client.requests();
     let changed = 0;
     for (const r of requests) {
-      seen.add(r.id);
       if (upsertRequest(ctx, r, 'seerr')) changed++;
     }
 
-    // Requests we created that fell out of the recent window: check them individually.
-    const orphans = ctx.db
-      .prepare('SELECT seerr_request_id AS id FROM requests WHERE seerr_request_id IS NOT NULL AND request_status IN (1, 2) ORDER BY updated_at DESC LIMIT 100')
-      .all() as { id: number }[];
+    // Requests deleted in Seerr (by hand, or with the title): no longer active here either. Not
+    // removed, so their history stays. Requests made while this ran are newer than `startedAt`.
+    const gone = ctx.db.prepare("UPDATE requests SET request_status = NULL, media_status = NULL, last_error = 'This request no longer exists in Seerr.', synced_at = ? WHERE seerr_request_id = ?");
+    const local = ctx.db
+      .prepare('SELECT seerr_request_id AS id FROM requests WHERE seerr_request_id IS NOT NULL AND request_status IS NOT NULL AND (synced_at IS NULL OR synced_at < ?) ORDER BY updated_at DESC')
+      .all(startedAt) as { id: number }[];
+    const missingIds = local.filter((o) => !seen.has(o.id));
     let missing = 0;
-    for (const o of orphans) {
-      if (seen.has(o.id)) continue;
-      const r = await client.request(o.id);
-      if (r) upsertRequest(ctx, r, 'seerr');
-      else {
-        missing++;
-        ctx.db.prepare("UPDATE requests SET request_status = NULL, media_status = NULL, last_error = 'This request no longer exists in Seerr.', synced_at = ? WHERE seerr_request_id = ?").run(nowIso(), o.id);
+    if (complete) {
+      ctx.db.transaction(() => missingIds.forEach((o) => gone.run(nowIso(), o.id)))();
+      missing = missingIds.length;
+    } else {
+      // More requests than one pass reads: check the ones not seen individually.
+      for (const o of missingIds.slice(0, 200)) {
+        const r = await client.request(o.id);
+        if (r) upsertRequest(ctx, r, 'seerr');
+        else {
+          missing++;
+          gone.run(nowIso(), o.id);
+        }
       }
     }
     ctx.integrations.markOk('seerr');

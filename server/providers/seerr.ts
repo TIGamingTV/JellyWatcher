@@ -281,18 +281,25 @@ export class SeerrClient {
   }
 
   /** Most recently modified requests first. */
-  async requests(maxItems = 1000): Promise<SeerrRequestJson[]> {
+  /**
+   * Requests, most recently modified first. `ids` holds every request id seen (unreadable ones
+   * included); `complete` says whether that is every request Seerr has.
+   */
+  async requests(maxItems = 1000): Promise<{ requests: SeerrRequestJson[]; ids: Set<number>; complete: boolean }> {
     const out: SeerrRequestJson[] = [];
+    const ids = new Set<number>();
     for (let skip = 0; skip < maxItems; skip += 100) {
       const res = await this.http.get('/request', { take: 100, skip, filter: 'all', sort: 'modified', sortDirection: 'desc' });
       const data = z.object({ pageInfo: PageInfo, results: z.array(z.unknown()) }).parse(res.data);
       for (const r of data.results) {
+        const id = (r as { id?: unknown } | null)?.id;
+        if (typeof id === 'number') ids.add(id);
         const p = RequestJson.safeParse(r);
         if (p.success) out.push(p.data);
       }
-      if (data.results.length < 100) break;
+      if (data.results.length < 100) return { requests: out, ids, complete: true };
     }
-    return out;
+    return { requests: out, ids, complete: false };
   }
 
   /** All media Seerr tracks (requested or detected as available). */

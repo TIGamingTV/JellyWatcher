@@ -4,7 +4,7 @@ import { inWindow, runJanitor } from '../server/janitor/engine';
 import { syncJellyfin } from '../server/sync/jellyfin';
 import { syncSeerr } from '../server/sync/seerr';
 import { Client, SETUP_CODE, settle, testApp } from './helpers/app';
-import { BOB_JF, HA, JF, RADARR, SEERR, SONARR, createMocks, sevEpisode } from './helpers/mocks';
+import { BOB_JF, HA, HEAT_JF, JF, RADARR, SEERR, SONARR, createMocks, sevEpisode } from './helpers/mocks';
 
 const DAY = 86400_000;
 
@@ -482,13 +482,12 @@ describe('Janitor next season: catching up with a requester who moved on by hand
     expect(await nextLog()).toHaveLength(2);
 
     const rows = (await admin.post('/api/admin/janitor/preview', {})).data.rows.filter((r: any) => r.titleId === sevId);
+    // Season 1 is behind them: not listed.
     expect(rows.map((r: any) => [r.season, r.status])).toEqual([
-      [1, 'not_in_library'],
       [3, 'waiting'],
       [4, 'not_in_library'],
     ]);
-    expect(rows[0].reason).toBe('No longer in Jellyfin; the request continues with season 4.');
-    expect(rows[1]).toMatchObject({ requesters: ['Alice'], reason: 'Waiting for Alice to finish it.' });
+    expect(rows[0]).toMatchObject({ requesters: ['Alice'], reason: 'Waiting for Alice to finish it.' });
   });
 
   it('cleans up the season they are on and keeps the show for the next one', async () => {
@@ -504,6 +503,56 @@ describe('Janitor next season: catching up with a requester who moved on by hand
     // Season 4 is still to come: the show and the request stay.
     expect(mocks.state.sonarrSeriesDeleted).toBe(false);
     expect(mocks.state.seerrCalls.filter((x) => x.method === 'DELETE')).toHaveLength(0);
+  });
+});
+
+describe('Janitor: titles deleted outside the Janitor', () => {
+  const mocks = createMocks();
+  let t: Awaited<ReturnType<typeof testApp>>;
+  let ctx: AppContext;
+  let admin: Client;
+  let heatId: number;
+  const heatRows = async () => ((await admin.post('/api/admin/janitor/preview', {})).data.rows as any[]).filter((r) => r.titleId === heatId);
+
+  beforeAll(async () => {
+    vi.stubGlobal('fetch', mocks.fetch);
+    t = await testApp({ JW_JANITOR: '1' });
+    ctx = t.ctx;
+    admin = new Client(t.app);
+    await admin.post('/api/setup', { setupCode: SETUP_CODE, username: 'admin', password: 'a-long-password', displayName: 'Alice' });
+    await admin.put('/api/integrations/jellyfin', { config: { url: JF.url }, secrets: { apiKey: JF.key } });
+    await admin.put('/api/integrations/seerr', { config: { url: SEERR.url }, secrets: { apiKey: SEERR.key } });
+    await admin.put('/api/integrations/radarr', { config: { url: RADARR.url }, secrets: { apiKey: RADARR.key } });
+    await admin.post('/api/connections/jellyfin', { username: 'alice', password: 'alicepw' });
+    await settle(ctx);
+    mocks.state.seerrRequests.push({ id: 900, status: 5, is4k: false, media: { id: 1, tmdbId: 949, mediaType: 'movie', status: 5 }, requestedBy: { id: 1, displayName: 'Admin' }, seasons: [], createdAt: '2026-08-01T00:00:00.000Z' });
+    await syncJellyfin(ctx);
+    await syncSeerr(ctx);
+    heatId = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 949').get() as { id: number }).id;
+    const rule = (await admin.post('/api/admin/janitor/templates/movie')).data.rule;
+    await admin.put(`/api/admin/janitor/rules/${rule.id}`, { ...rule, enabled: true });
+    await settle(ctx);
+  });
+  afterAll(async () => {
+    await settle(ctx);
+    await t.close();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not list a movie deleted from Jellyfin and Radarr', async () => {
+    expect((await heatRows()).map((r) => r.status)).toEqual(['eligible']);
+    // Deleted by hand in Radarr (files too): Jellyfin loses it, the Seerr request is still there.
+    mocks.state.radarrMovies = [];
+    mocks.state.jellyfinRemoved.add(HEAT_JF);
+    await syncJellyfin(ctx);
+    expect(await heatRows()).toEqual([]);
+  });
+
+  it('drops requests deleted in Seerr, completed ones included', async () => {
+    mocks.state.seerrRequests = [];
+    await syncSeerr(ctx);
+    expect(ctx.db.prepare('SELECT request_status, last_error FROM requests WHERE seerr_request_id = 900').get()).toEqual({ request_status: null, last_error: 'This request no longer exists in Seerr.' });
+    expect((await admin.get(`/api/admin/janitor/titles/${heatId}`)).data.requested).toBe(false);
   });
 });
 
