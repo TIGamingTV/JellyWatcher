@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCheck, ChevronLeft, Eye, ExternalLink, ListPlus, Play, Plus, Star } from 'lucide-react';
@@ -14,6 +14,8 @@ import { mapSeerrRequest } from '../../../shared/status';
 import { WatchedSheet } from '../components/Watched';
 import { AddToListSheet } from '../components/LocalLists';
 import { RequestSheet } from '../components/RequestSheet';
+
+const TitleJanitor = lazy(() => import('./Janitor').then((m) => ({ default: m.TitleJanitor })));
 
 const TRACK = ['On Watchlist', 'Requested', 'Processing', 'In Library', 'Watched'] as const;
 
@@ -67,7 +69,7 @@ function Freshness({ syncedAt, stale, source }: { syncedAt: string | null; stale
 export function TitlePage() {
   const id = Number(useParams().id);
   const navigate = useNavigate();
-  const { user } = useUser();
+  const { user, janitor } = useUser();
   const [params, setParams] = useSearchParams();
   // Deep link from Up Next: /titles/:id?request=1&season=2 opens the request sheet with that season.
   const [requesting, setRequesting] = useState(params.get('request') === '1');
@@ -277,6 +279,12 @@ export function TitlePage() {
           {t.metadataSource && <p className="group-footer">Metadata from {t.metadataSource === 'tmdb' || t.metadataSource === 'seerr' ? 'TMDb' : PROVIDER_NAME[t.metadataSource] ?? t.metadataSource}.</p>}
         </section>
       </div>
+
+      {janitor && (
+        <Suspense fallback={null}>
+          <TitleJanitor titleId={t.id} title={t.title} mediaType={t.mediaType} />
+        </Suspense>
+      )}
 
       {marking && <WatchedSheet titleId={t.id} title={t.title} mediaType={t.mediaType} watch={d.watch} onClose={() => setMarking(false)} />}
       {adding && <AddToListSheet title={{ id: t.id, tmdbId: t.tmdbId, mediaType: t.mediaType, title: t.title, year: t.year }} onClose={() => setAdding(false)} />}

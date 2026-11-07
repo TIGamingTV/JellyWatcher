@@ -614,6 +614,7 @@ const INTERVALS: { key: string; label: string; hint: string; min: number; max: n
 
 function SyncSettings() {
   const toast = useToast();
+  const { janitor } = useUser();
   const settings = useQuery({ queryKey: ['admin-settings'], queryFn: () => get<{ settings: Record<string, number | boolean> }>('/admin/settings') });
   const history = useQuery({ queryKey: ['sync-history'], queryFn: () => get<{ runs: SyncRun[] }>('/admin/sync/history?limit=60'), refetchInterval: 10_000 });
   const [values, setValues] = useState<Record<string, number>>({});
@@ -672,6 +673,7 @@ function SyncSettings() {
             ['lists', 'All automatically synced lists'],
             ['match', 'Match imported titles'],
             ['metadata', 'Refresh artwork and details'],
+            ...(janitor ? [['janitor', 'Janitor: check rules and run due cleanup steps']] : []),
           ].map(([job, label]) => (
             <div key={job} className="row">
               <div className="row-main">{label}</div>

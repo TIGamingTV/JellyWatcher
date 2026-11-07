@@ -1,4 +1,5 @@
 import type { AppContext } from '../context.js';
+import { runJanitor } from '../janitor/engine.js';
 import type { JobName } from '../services/jobs.js';
 import { syncJellyfin } from './jellyfin.js';
 import { syncDueLists } from './lists.js';
@@ -24,7 +25,12 @@ export const JOBS: Record<Exclude<JobName, 'cleanup'>, (ctx: AppContext) => Prom
     void triggerJob(ctx, 'match', 'event');
     return r;
   },
-  jellyfin: syncJellyfin,
+  jellyfin: async (ctx) => {
+    const r = await syncJellyfin(ctx);
+    // Fresh viewing data: let the Janitor look at it.
+    if (ctx.config.janitor) void triggerJob(ctx, 'janitor', 'event');
+    return r;
+  },
   seerr: async (ctx) => {
     const r = await syncSeerr(ctx);
     void triggerJob(ctx, 'metadata', 'event');
@@ -36,6 +42,7 @@ export const JOBS: Record<Exclude<JobName, 'cleanup'>, (ctx: AppContext) => Prom
     void triggerJob(ctx, 'metadata', 'event');
     return r;
   },
+  janitor: (ctx) => runJanitor(ctx),
 };
 
 export function triggerJob(ctx: AppContext, job: Exclude<JobName, 'cleanup'>, trigger: 'manual' | 'event' | 'schedule' | 'startup' = 'manual') {
@@ -57,6 +64,8 @@ function intervalFor(ctx: AppContext, job: JobName): number {
       return 60;
     case 'cleanup':
       return 24 * 60;
+    case 'janitor':
+      return s['janitor.intervalMinutes'];
   }
 }
 
@@ -83,7 +92,7 @@ export class Scheduler {
   }
 
   tick(trigger: 'schedule' | 'startup' = 'schedule'): void {
-    const jobs: JobName[] = ['seerr', 'jellyfin', 'lists', 'match', 'metadata', 'cleanup'];
+    const jobs: JobName[] = ['seerr', 'jellyfin', 'lists', 'match', 'metadata', 'cleanup', ...(this.ctx.config.janitor ? (['janitor'] as const) : [])];
     for (const job of jobs) {
       if (this.ctx.jobs.isRunning(job)) continue;
       const last = this.ctx.jobs.lastRun(job);
@@ -107,6 +116,7 @@ function cleanup(ctx: AppContext) {
   const sessions = ctx.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now).changes;
   ctx.jobs.prune(90);
   ctx.activity.prune(180);
+  ctx.db.prepare('DELETE FROM janitor_log WHERE created_at < ?').run(new Date(Date.now() - 365 * 86400_000).toISOString());
   // Titles no longer referenced anywhere.
   const titles = ctx.db
     .prepare(
@@ -116,6 +126,7 @@ function cleanup(ctx: AppContext) {
          AND id NOT IN (SELECT title_id FROM match_resolutions WHERE title_id IS NOT NULL)
          AND id NOT IN (SELECT title_id FROM watch_history)
          AND id NOT IN (SELECT title_id FROM watched_episodes)
+         AND id NOT IN (SELECT title_id FROM janitor_exclusions)
          AND updated_at < ?`,
     )
     .run(new Date(Date.now() - 7 * 86400_000).toISOString()).changes;

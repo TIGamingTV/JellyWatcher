@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Copy, ExternalLink, Eye, EyeOff, RefreshCw, Smartphone } from 'lucide-react';
 import { del, errorText, get, post, put } from '../lib/api';
 import { useRefreshMe, useToast, useUser } from '../lib/session';
-import type { IntegrationView, JellyfinPluginView, QuickConnectStart, SourceId, SourcesResponse, SyncRun, TestResult, UploadSource } from '../lib/types';
+import type { IntegrationView, JellyfinPluginView, QuickConnectStart, ServerProvider, SourceId, SourcesResponse, SyncRun, TestResult, UploadSource } from '../lib/types';
 import { plural } from '../lib/format';
 import { Banner, CenterLoading, ConfirmSheet, Field, PageHeader, ProviderMark, Spinner, SyncButton, Time, Toggle } from '../components/ui';
 import { AddListSheet, LinkForm, UploadBox, UploadInstructions, useInvalidateLists } from '../components/AddList';
@@ -12,10 +12,12 @@ import { SERVICE_COPY } from './Integrations';
 import { QuickConnectPanel } from '../components/QuickConnect';
 
 const VALID = ['jellyfin', 'seerr', 'tmdb', 'trakt', 'letterboxd', 'imdb'];
+const JANITOR = ['sonarr', 'radarr', 'homeassistant'];
 
 export function IntegrationDetail() {
   const provider = useParams().provider ?? '';
-  if (!VALID.includes(provider)) return <Navigate to="/integrations" replace />;
+  const { janitor } = useUser();
+  if (!VALID.includes(provider) && !(janitor && JANITOR.includes(provider))) return <Navigate to="/integrations" replace />;
   return (
     <>
       <Link to="/integrations" className="back-link">
@@ -27,6 +29,8 @@ export function IntegrationDetail() {
       {provider === 'trakt' && <TraktPage />}
       {provider === 'letterboxd' && <LetterboxdPage />}
       {provider === 'imdb' && <SourcePage id="imdb" />}
+      {(provider === 'sonarr' || provider === 'radarr') && <ArrPage provider={provider} />}
+      {provider === 'homeassistant' && <HomeAssistantPage />}
     </>
   );
 }
@@ -90,7 +94,7 @@ interface FieldDef {
 }
 
 /** Admin form for a server-wide integration: Save & Test, Test, Disconnect. Secrets are write-only. */
-function ServerForm({ provider, fields, intro, onSaved }: { provider: 'jellyfin' | 'seerr' | 'tmdb' | 'trakt'; fields: FieldDef[]; intro?: ReactNode; onSaved?: () => void }) {
+function ServerForm({ provider, fields, intro, onSaved }: { provider: ServerProvider; fields: FieldDef[]; intro?: ReactNode; onSaved?: () => void }) {
   const q = useIntegration(provider);
   const qc = useQueryClient();
   const toast = useToast();
@@ -555,6 +559,73 @@ function SeerrPage() {
       )}
       {isAdmin && services.seerr && <JobStatus job="seerr" label="Request Sync" />}
       {isAdmin && services.seerr && <WebhookSection target="seerr" />}
+    </>
+  );
+}
+
+/** Sonarr or Radarr, used only by the Janitor to delete what was watched. */
+function ArrPage({ provider }: { provider: 'sonarr' | 'radarr' }) {
+  const name = provider === 'sonarr' ? 'Sonarr' : 'Radarr';
+  return (
+    <>
+      <Header
+        provider={provider}
+        title={name}
+        subtitle={`Used only by the Janitor: it ${provider === 'sonarr' ? 'deletes watched seasons and finished shows' : 'deletes watched movies'} here, with their files. Nothing else in JellyWatcher writes to ${name}.`}
+      />
+      <ServerForm
+        provider={provider}
+        fields={[
+          { key: 'url', label: 'Server URL', type: 'url', placeholder: provider === 'sonarr' ? 'http://sonarr:8989' : 'http://radarr:7878', hint: `The address JellyWatcher’s container uses to reach ${name}. Include any URL base; do not add /api.` },
+          { key: 'apiKey', label: 'API key', secret: true, placeholder: 'Paste the key', hint: `In ${name}: Settings › General › Security › API Key. It is stored encrypted and never shown again.` },
+        ]}
+      />
+      <Banner kind="warn" title="Deletions are permanent">
+        The Janitor deletes files through {name} only when a rule says so. New rules start in dry run. <Link to="/janitor">Open the Janitor</Link>
+      </Banner>
+    </>
+  );
+}
+
+function HomeAssistantPage() {
+  const toast = useToast();
+  const q = useIntegration('homeassistant');
+  const [busy, setBusy] = useState(false);
+  const test = async () => {
+    setBusy(true);
+    try {
+      await post('/admin/janitor/test-notification');
+      toast('success', 'Test notification sent.');
+    } catch (err) {
+      toast('error', errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <Header provider="homeassistant" title="Home Assistant" subtitle="The Janitor tells you here before it deletes something, when it is done, and when something fails." />
+      <ServerForm
+        provider="homeassistant"
+        fields={[
+          { key: 'url', label: 'Server URL', type: 'url', placeholder: 'http://homeassistant:8123', hint: 'The address JellyWatcher’s container uses to reach Home Assistant.' },
+          { key: 'service', label: 'Notify service', placeholder: 'mobile_app_pixel_8', hint: 'The notify action that reaches you, without “notify.”. Find it in Developer Tools › Actions (e.g. notify.mobile_app_your_phone).' },
+          { key: 'token', label: 'Long-lived access token', secret: true, placeholder: 'eyJhbGciOi…', hint: 'In Home Assistant: your profile › Security › Long-lived access tokens › Create token. Stored encrypted.' },
+        ]}
+      />
+      {q.data?.ready && (
+        <Section title="Test" footer="Set JW_PUBLIC_URL so notifications open the Janitor page when tapped.">
+          <div className="row">
+            <div className="row-main">
+              <div className="row-title">Send a test notification</div>
+            </div>
+            <button className="btn btn-small" onClick={test} disabled={busy}>
+              {busy && <Spinner />}
+              Send
+            </button>
+          </div>
+        </Section>
+      )}
     </>
   );
 }

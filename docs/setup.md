@@ -80,6 +80,8 @@ Each service also has an optional **Browser URL** for links you click.
 | **Seerr** (for requests) | Server URL (without `/api/v1`) + API key | Seerr › Settings › General › API Key |
 | **TMDb** (optional) | API Read Access Token | themoviedb.org › Settings › API. Without it, Seerr's TMDb access is used. |
 | **Trakt** (optional) | Client ID + Client Secret | Create an app at trakt.tv/oauth/applications/new. The Redirect URI can be `urn:ietf:wg:oauth:2.0:oob`; device sign-in doesn't use it. |
+| **Sonarr / Radarr** (Janitor only) | Server URL + API key | Settings › General › Security › API Key. Shown only with `JW_JANITOR=true`, see [Janitor](janitor.md). |
+| **Home Assistant** (Janitor only) | Server URL + notify service + long-lived access token | Profile › Security › Long-lived access tokens; the service name from Developer Tools › Actions. |
 
 Each page has **Save and Test** (saves the values and verifies them) and **Test Without Saving**.
 Secrets are write-only: after saving, the field shows "saved", and leaving it empty keeps the
@@ -200,7 +202,8 @@ Without webhooks, JellyWatcher polls on the schedule in Settings › Sync. Defau
 | `JW_LOG_LEVEL` | `info` | `trace` … `error`. |
 | `JW_LOG_FILE` | `true` | Also log to `/data/logs/jellywatcher.log`, rotated at 10 MB on start. |
 | `JW_DISABLE_SCHEDULER` | `false` | Turn off background sync (debugging). |
-| `TZ` | `UTC` | Time zone for logs. |
+| `JW_JANITOR` | `false` | Turn on the [Janitor](janitor.md): deletes watched requests in Sonarr, Radarr and Seerr by your rules. |
+| `TZ` | `UTC` | Time zone for logs and the Janitor's deletion window. |
 
 ## Development
 
@@ -209,7 +212,7 @@ npm install
 npm run dev        # API on :8484 (data in ./.data) + Vite on :5173 with proxy
 npm test           # unit + end-to-end tests against mocked Jellyfin/Seerr/Trakt
 npm run typecheck
-npx tsx tests/helpers/serve-mocks.ts   # fake Jellyfin :18096 / Seerr :15055 for manual UI testing
+npx tsx tests/helpers/serve-mocks.ts   # fake Jellyfin :18096 / Seerr :15055 / Sonarr :18989 / Radarr :17878 / Home Assistant :18123
 ```
 
 The mock services are for development only. Their data is never shown as live information.

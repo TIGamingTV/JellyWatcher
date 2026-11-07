@@ -145,11 +145,11 @@ export class TitleService {
   merge(fromId: number, intoId: number): void {
     if (fromId === intoId) return;
     this.db.transaction(() => {
-      for (const table of ['list_items', 'jellyfin_items', 'requests', 'activity', 'match_resolutions']) {
+      for (const table of ['list_items', 'jellyfin_items', 'requests', 'activity', 'match_resolutions', 'janitor_exclusions', 'janitor_log']) {
         this.db.prepare(`UPDATE ${table} SET title_id = ? WHERE title_id = ?`).run(intoId, fromId);
       }
       // Keyed by title: keep the surviving row's entry when both exist (the rest cascades away).
-      for (const table of ['watch_history', 'watched_episodes', 'manual_watches', 'skipped_entries']) {
+      for (const table of ['watch_history', 'watched_episodes', 'manual_watches', 'skipped_entries', 'janitor_candidates']) {
         this.db.prepare(`UPDATE OR IGNORE ${table} SET title_id = ? WHERE title_id = ?`).run(intoId, fromId);
       }
       this.db.prepare('DELETE FROM titles WHERE id = ?').run(fromId);

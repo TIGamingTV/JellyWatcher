@@ -11,6 +11,9 @@ export const SERVICE_COPY: Record<string, { name: string; role: string }> = {
   seerr: { name: 'Seerr', role: 'Requests and their status' },
   tmdb: { name: 'TMDb', role: 'Artwork, synopses and title matching' },
   trakt: { name: 'Trakt API App', role: 'Required for Trakt lists and sign-in' },
+  sonarr: { name: 'Sonarr', role: 'Janitor: deletes watched seasons and shows' },
+  radarr: { name: 'Radarr', role: 'Janitor: deletes watched movies' },
+  homeassistant: { name: 'Home Assistant', role: 'Janitor: notifications to you' },
 };
 
 function StatusText({ v }: { v: Pick<IntegrationView, 'ready' | 'status' | 'lastOkAt'> }) {

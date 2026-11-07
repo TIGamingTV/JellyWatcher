@@ -208,6 +208,15 @@ export class HttpClient {
   post<T = unknown>(path: string, body?: unknown, extra: Partial<RequestOptions> = {}) {
     return this.request<T>({ ...extra, method: 'POST', path, body });
   }
+
+  put<T = unknown>(path: string, body?: unknown, extra: Partial<RequestOptions> = {}) {
+    return this.request<T>({ ...extra, method: 'PUT', path, body });
+  }
+
+  /** DELETE is never retried automatically (it may have succeeded before the connection dropped). */
+  delete<T = unknown>(path: string, query?: RequestOptions['query'], extra: Partial<RequestOptions> = {}) {
+    return this.request<T>({ ...extra, method: 'DELETE', path, query });
+  }
 }
 
 function sameServer(from: URL, to: URL): boolean {

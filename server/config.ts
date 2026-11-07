@@ -65,6 +65,8 @@ export interface AppConfig {
   logFile: boolean;
   setupToken: string | undefined;
   disableScheduler: boolean;
+  /** JW_JANITOR: automatic cleanup of watched requests (Sonarr, Radarr, Seerr). Off unless set. */
+  janitor: boolean;
   webDir: string;
 }
 
@@ -87,6 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     logFile: bool(env.JW_LOG_FILE, true),
     setupToken: env.JW_SETUP_TOKEN || undefined,
     disableScheduler: bool(env.JW_DISABLE_SCHEDULER, false),
+    janitor: bool(env.JW_JANITOR, false),
     webDir: path.resolve(env.JW_WEB_DIR ?? path.join(process.cwd(), 'dist/web')),
   };
 }

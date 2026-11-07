@@ -1,14 +1,21 @@
 import { nowIso, parseJson, type DB } from '../db/index.js';
 import { errorMessage } from '../http/errors.js';
+import { HomeAssistantClient } from '../providers/homeassistant.js';
 import { JellyfinClient } from '../providers/jellyfin.js';
+import { RadarrClient } from '../providers/radarr.js';
 import { SeerrClient } from '../providers/seerr.js';
+import { SonarrClient } from '../providers/sonarr.js';
 import { TmdbClient } from '../providers/tmdb.js';
 import { TraktClient } from '../providers/trakt.js';
 import type { SecretBox } from '../security/crypto.js';
 import { scrub } from '../logger.js';
 
-export type ServerIntegration = 'jellyfin' | 'seerr' | 'tmdb' | 'trakt';
-export const SERVER_INTEGRATIONS: ServerIntegration[] = ['jellyfin', 'seerr', 'tmdb', 'trakt'];
+export type ServerIntegration = 'jellyfin' | 'seerr' | 'tmdb' | 'trakt' | 'sonarr' | 'radarr' | 'homeassistant';
+export const SERVER_INTEGRATIONS: ServerIntegration[] = ['jellyfin', 'seerr', 'tmdb', 'trakt', 'sonarr', 'radarr', 'homeassistant'];
+/** Only offered when the Janitor is turned on (JW_JANITOR). */
+export const JANITOR_INTEGRATIONS: ServerIntegration[] = ['sonarr', 'radarr', 'homeassistant'];
+/** Integrations available in this process. */
+export const activeIntegrations = (janitor: boolean): ServerIntegration[] => SERVER_INTEGRATIONS.filter((p) => janitor || !JANITOR_INTEGRATIONS.includes(p));
 
 export interface IntegrationRecord {
   provider: ServerIntegration;
@@ -28,6 +35,9 @@ export const SECRET_FIELDS: Record<ServerIntegration, string[]> = {
   seerr: ['apiKey'],
   tmdb: ['token'],
   trakt: ['clientSecret'],
+  sonarr: ['apiKey'],
+  radarr: ['apiKey'],
+  homeassistant: ['token'],
 };
 
 interface Row {
@@ -117,7 +127,11 @@ export class IntegrationStore {
     switch (provider) {
       case 'jellyfin':
       case 'seerr':
+      case 'sonarr':
+      case 'radarr':
         return Boolean(r.config.url && r.secrets.apiKey);
+      case 'homeassistant':
+        return Boolean(r.config.url && r.config.service && r.secrets.token);
       case 'tmdb':
         return Boolean(r.secrets.token);
       case 'trakt':
@@ -162,6 +176,24 @@ export class IntegrationStore {
     const r = this.get('trakt');
     if (!this.isReady('trakt')) return null;
     return new TraktClient(String(r.config.clientId), r.secrets.clientSecret);
+  }
+
+  sonarr(): SonarrClient | null {
+    const r = this.get('sonarr');
+    if (!this.isReady('sonarr')) return null;
+    return new SonarrClient(String(r.config.url), r.secrets.apiKey!);
+  }
+
+  radarr(): RadarrClient | null {
+    const r = this.get('radarr');
+    if (!this.isReady('radarr')) return null;
+    return new RadarrClient(String(r.config.url), r.secrets.apiKey!);
+  }
+
+  homeAssistant(): HomeAssistantClient | null {
+    const r = this.get('homeassistant');
+    if (!this.isReady('homeassistant')) return null;
+    return new HomeAssistantClient(String(r.config.url), r.secrets.token!, String(r.config.service));
   }
 
   /** Public view: never includes secret values, only whether they are set. */

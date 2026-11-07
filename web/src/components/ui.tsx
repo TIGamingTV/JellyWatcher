@@ -228,7 +228,7 @@ export function SyncButton({ busy, onClick, label = 'Refresh', disabled }: { bus
 }
 
 export function ProviderMark({ provider, size = 40 }: { provider: string; size?: number }) {
-  const letters: Record<string, string> = { trakt: 'T', letterboxd: 'Lb', imdb: 'IMDb', jellyfin: 'Jf', seerr: 'S', tmdb: 'TMDb', myanimelist: 'MAL', anilist: 'AL', simkl: 'S', mdblist: 'MDB', local: 'JW' };
+  const letters: Record<string, string> = { trakt: 'T', letterboxd: 'Lb', imdb: 'IMDb', jellyfin: 'Jf', seerr: 'S', tmdb: 'TMDb', myanimelist: 'MAL', anilist: 'AL', simkl: 'S', mdblist: 'MDB', local: 'JW', sonarr: 'So', radarr: 'Ra', homeassistant: 'HA' };
   return (
     <span className={`provider-mark provider-${provider}`} style={{ width: size, height: size, fontSize: size < 32 ? 10 : ['imdb', 'tmdb', 'myanimelist', 'mdblist'].includes(provider) ? 11 : 14 }} aria-hidden>
       {letters[provider] ?? provider.slice(0, 2)}

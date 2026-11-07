@@ -20,6 +20,8 @@ services:
       # Only behind a reverse proxy (see docs/operations.md):
       # JW_PUBLIC_URL: https://watch.example.com
       # JW_TRUST_PROXY: "172.16.0.0/12"   # the proxy's address(es); "true" trusts every client
+      # Optional: automatic cleanup of watched requests in Sonarr/Radarr/Seerr (docs/janitor.md):
+      # JW_JANITOR: "true"
     env_file:                       # optional extra settings, see .env.example
       - path: .env
         required: false
