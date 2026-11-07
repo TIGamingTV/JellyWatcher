@@ -92,7 +92,19 @@ episodes marked *Not Watching* do not, and they must have watched at least one):
 2. That season is added to **their** request in JellyWatcher (Seerr's request stays as it is). From
    then on it is a season they requested: it gets its own cleanup once watched, and *no episode
    files are left* is not true until the Janitor deleted it, so the show and the request stay until
-   then. A requester who already moved on before the option was turned on is caught up the same way.
+   then.
+
+The next season is always the one after the **last** season of their request, so a season they
+already watched and deleted is never monitored again, nor one the show is already past (a later
+season is in Jellyfin or monitored).
+
+**Catching up:** a requester who moved on by hand (e.g. requested season 1, monitored and deleted
+seasons in Sonarr themselves and is now on season 4) is caught up on the next run: every season after
+their request that is in Jellyfin or monitored in Sonarr joins their request, once they watched
+anything after the requested seasons or those seasons are gone from Jellyfin and Sonarr. This only
+changes JellyWatcher's bookkeeping (Sonarr is not touched), so it happens in dry run too. Requested
+seasons that are gone show as *No longer in Jellyfin; the request continues with season N* in the
+preview.
 
 It happens once per season and is logged (*Monitor the next season*). It is not a deletion: it runs in
 *Ask first* and *Automatic* mode without approval and outside the deletion window, and stops while

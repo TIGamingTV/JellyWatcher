@@ -69,6 +69,8 @@ export interface Unit {
   next: { season: number; monitored: boolean } | null;
   /** Shows: seasons any active request of the title covers (added ones included); null: every season. */
   requestedSeasons: Set<number> | null;
+  /** Shows: regular seasons in Jellyfin, or monitored or with files in Sonarr. */
+  presentSeasons: number[];
   inLibrary: boolean;
   /** Everything that aired is downloaded; otherwise `incomplete` says why. */
   incomplete: string | null;
@@ -147,6 +149,7 @@ export function buildUnits(ctx: AppContext, kind: JanitorUnit, arr: ArrSnapshot)
         episodeCount: 0,
         next: null,
         requestedSeasons: null,
+        presentSeasons: [],
         inLibrary: inLib,
         incomplete: null,
         sizeBytes: movie?.sizeOnDisk ?? null,
@@ -162,7 +165,8 @@ export function buildUnits(ctx: AppContext, kind: JanitorUnit, arr: ArrSnapshot)
     const eps = (episodesOf.all(titleId) as { season: number; episode: number }[]).map((e) => [e.season, e.episode] as const);
     const sizes = seasonSizes(t.seasons);
     const requestedSeasons = requests.some((r) => r.seasons.length === 0) ? null : new Set(requests.flatMap((r) => r.seasons));
-    const common = { seriesStatus: series?.status ?? null, sonarrId: series?.id ?? null, radarrId: null, requestedSeasons };
+    const presentSeasons = [...new Set([...eps.map(([s]) => s), ...[...sSeasons.values()].filter((s) => s.monitored || s.files > 0).map((s) => s.season)])].filter((s) => s > 0).sort((a, b) => a - b);
+    const common = { seriesStatus: series?.status ?? null, sonarrId: series?.id ?? null, radarrId: null, requestedSeasons, presentSeasons };
     const countOf = (season: number) => Math.max(sSeasons.get(season)?.total ?? 0, sizes.get(season) ?? 0, eps.filter(([s]) => s === season).length);
 
     if (kind === 'series') {
