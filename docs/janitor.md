@@ -38,7 +38,8 @@ database for when you turn it back on.
 ## What it considers
 
 Only **titles requested through Seerr** (approved or completed requests). Anything you added to Sonarr
-or Radarr yourself, or that is only in Jellyfin, is never touched.
+or Radarr yourself, or that is only in Jellyfin, is never touched. The one addition: seasons the
+[next-season option](#next-season) added to a request count as requested by it.
 
 Each request belongs to the **first turned-on rule that matches it**, from the top of the Rules page.
 
@@ -75,6 +76,30 @@ invisible to the Janitor.
 | *All of them* / *At least N* | Every one of them must finish, or at least N of them (N larger than the group means all of them). With the requester ignored and *Everyone*, *At least 1* means “anyone watched it”. |
 | *Stop waiting for people inactive for N days* | Someone who has not played anything of the title for N days (counted from their last play, or from when the requester finished) stops holding it back. Does not apply to the requester. |
 
+### Next season
+
+Rules that handle shows season by season can follow the requester through the show. Seerr requests
+usually list only the first season; without this, the Janitor only knows about that season, so the
+season they moved on to is never cleaned up and the request (and the show) may go while they are
+still watching.
+
+With **Monitor the next season** on (default in the *Watched seasons* template), once a requester has
+at most **N episodes of a season left** (default 3; episodes not downloaded yet count as left,
+episodes marked *Not Watching* do not, and they must have watched at least one):
+
+1. Sonarr monitors the next season and, unless turned off, searches for it right away (otherwise it
+   only grabs new releases). A season that is already monitored is left as it is.
+2. That season is added to **their** request in JellyWatcher (Seerr's request stays as it is). From
+   then on it is a season they requested: it gets its own cleanup once watched, and *no episode
+   files are left* is not true until the Janitor deleted it, so the show and the request stay until
+   then. A requester who already moved on before the option was turned on is caught up the same way.
+
+It happens once per season and is logged (*Monitor the next season*). It is not a deletion: it runs in
+*Ask first* and *Automatic* mode without approval and outside the deletion window, and stops while
+the Janitor is paused. Dry runs log it once and change nothing. Only requesters with a JellyWatcher
+account count, and only requests that list seasons (a request for the whole show already covers
+every season). A title's page lists the seasons added to its requests.
+
 ## Steps
 
 A rule's steps run from the top. Each cleanup remembers where it is, so a restart continues at the
@@ -85,7 +110,7 @@ same step.
 | **Wait** | Days and hours. The first wait counts from when the last person needed finished watching (their last play or mark); later ones from the step before. Switching a rule from dry run to Ask first or Automatic therefore does not restart the clock. |
 | **Notify in Home Assistant** | Sends your message. Placeholders: `{title}` (with the season), `{show}`, `{date}` of the next deletion (the waits until it, added up), `{requester}`, `{size}`, `{rule}`. |
 | **Wait for approval** | Stops until you approve it in the Overview. |
-| **Continue only if…** | *the show has ended in Sonarr*, or *no episode files are left* (specials aside). Otherwise *stop here*, or *check again daily*. |
+| **Continue only if…** | *the show has ended in Sonarr*, or *no episode files are left* (specials aside, and every season the next-season option added to a request already deleted by the Janitor). Otherwise *stop here*, or *check again daily*. |
 | **Delete season in Sonarr** | Optionally unmonitors the season first (so Sonarr does not download it again), then deletes the season's episode files. |
 | **Delete show in Sonarr** | Removes the show with all its files; optionally adds an import list exclusion. |
 | **Delete movie in Radarr** | Removes the movie with its files; optionally adds an import exclusion. |
@@ -95,7 +120,7 @@ same step.
 ### Templates
 
 - **Watched movies:** wait 7 days → notify → wait 3 days → delete movie in Radarr → delete the request.
-- **Watched seasons:** wait 7 days → notify → wait 3 days → delete the season in Sonarr (unmonitored)
+- **Watched seasons:** monitors the next season at 3 episodes left; wait 7 days → notify → wait 3 days → delete the season in Sonarr (unmonitored)
   → continue only if the show has ended (else check daily) → continue only if no files are left
   (else stop) → delete the show in Sonarr → delete the request. A continuing show keeps its request,
   so new seasons still arrive; once the show ends and the last season is gone, the show and the
@@ -145,7 +170,7 @@ sync, when you save or turn on a rule, and with **Run Now** (also in Settings �
    matched, kept titles, titles not in Jellyfin and incomplete seasons, then check who has watched
    them. Ready units get a cleanup; cleanups that are no longer ready are dropped unless they already
    deleted something.
-3. Unless paused, run every cleanup that is due: its steps until a wait, an approval, a gate that
+3. Unless paused, monitor next seasons for requesters close to the end of one, then run every cleanup that is due: its steps until a wait, an approval, a gate that
    says stop or wait, the end, or a failure.
 4. After real deletions, sync Seerr and Jellyfin.
 

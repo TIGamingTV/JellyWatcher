@@ -18,6 +18,10 @@ export interface PersonProgress {
   lastActivity: string | null;
   /** Has the title on one of their watchlists. */
   watchlisted: boolean;
+  /** Shows: episodes of the unit they watched or marked watched. */
+  watched?: number;
+  /** Shows: episodes of the unit still to watch (not downloaded ones included); null: not watching the show. */
+  left?: number | null;
 }
 
 export interface PolicyInput {

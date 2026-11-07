@@ -354,6 +354,7 @@ export function createMocks() {
           return json({});
         }
       }
+      if (p === '/command' && method === 'POST') return json({ id: 1, name: (body as { name?: string }).name, status: 'queued' }, 201);
       if (p === '/episodefile' && method === 'GET') return json(url.searchParams.get('seriesId') === '42' && !state.sonarrSeriesDeleted ? state.sonarrFiles : []);
       const ef = p.match(/^\/episodefile\/(\d+)$/);
       if (ef && method === 'DELETE') {

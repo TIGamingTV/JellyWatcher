@@ -6,6 +6,7 @@ import { ProviderError } from '../http/errors.js';
  * Sonarr v3/v4 API adapter (Janitor only). Base {url}/api/v3, header X-Api-Key.
  *  - GET /series (all, with per-season statistics), GET /series/{id}, PUT /series/{id}
  *  - GET /episodefile?seriesId=, DELETE /episodefile/{id}
+ *  - POST /command {name: 'SeasonSearch', seriesId, seasonNumber}
  *  - DELETE /series/{id}?deleteFiles=true&addImportListExclusion=
  */
 
@@ -107,6 +108,11 @@ export class SonarrClient {
     if (!seasons.some((x) => x.seasonNumber === season)) return false;
     await this.http.put(`/series/${seriesId}`, { ...s, seasons });
     return true;
+  }
+
+  /** Asks Sonarr to search for a season's monitored episodes. */
+  async searchSeason(seriesId: number, season: number): Promise<void> {
+    await this.http.post('/command', { name: 'SeasonSearch', seriesId, seasonNumber: season });
   }
 
   /** Deletes the files of one season. Returns the bytes freed. Files already gone count as done. */

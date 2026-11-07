@@ -536,7 +536,8 @@ function ruleSummary(r: JanitorRule): string {
       : w.othersMode === 'at_least'
         ? `${w.atLeast}+ of ${OTHERS_SHORT[w.others]}`
         : `all ${OTHERS_SHORT[w.others]}`;
-  return `${UNIT_LABEL[r.unit]} · ${who} watched · ${r.steps.length} ${r.steps.length === 1 ? 'step' : 'steps'}`;
+  const next = r.unit === 'season' && r.nextSeason.enabled ? ` · next season at ${r.nextSeason.episodesLeft} left` : '';
+  return `${UNIT_LABEL[r.unit]} · ${who} watched${next} · ${r.steps.length} ${r.steps.length === 1 ? 'step' : 'steps'}`;
 }
 
 const OTHERS_SHORT: Record<JanitorRule['watchers']['others'], string> = {
@@ -727,7 +728,13 @@ function RuleEditor() {
 
   const setUnit = (unit: JanitorUnit) => {
     const steps = draft.steps.filter((s) => STEPS_FOR_UNIT[unit].includes(s.type));
-    set({ unit, mediaType: unit === 'movie' ? 'movie' : 'tv', steps, match: { ...draft.match, seriesStatus: unit === 'movie' ? 'any' : draft.match.seriesStatus } });
+    set({
+      unit,
+      mediaType: unit === 'movie' ? 'movie' : 'tv',
+      steps,
+      match: { ...draft.match, seriesStatus: unit === 'movie' ? 'any' : draft.match.seriesStatus },
+      nextSeason: { ...draft.nextSeason, enabled: unit === 'season' && draft.nextSeason.enabled },
+    });
   };
   const setStep = (i: number, s: JanitorStep) => set({ steps: draft.steps.map((x, j) => (j === i ? s : x)) });
   const moveStep = (i: number, dir: -1 | 1) => {
@@ -938,6 +945,41 @@ function RuleEditor() {
           )}
         </div>
       </Section>
+
+      {draft.unit === 'season' && (
+        <Section
+          title="Next Season"
+          footer="Requests in Seerr usually list only the first season. With this on, the season the requester moves on to counts as part of their request, so it is cleaned up like the one they asked for, and the request is only deleted once they are done. Not a deletion: it happens in “Ask first” and “Automatic” mode, outside the deletion window too. Dry runs only log it."
+        >
+          <div className="form-stack">
+            <div className="inline" style={{ justifyContent: 'space-between' }}>
+              <span>Monitor the next season in Sonarr</span>
+              <Toggle checked={draft.nextSeason.enabled} onChange={(v) => set({ nextSeason: { ...draft.nextSeason, enabled: v } })} label="Monitor the next season" />
+            </div>
+            {draft.nextSeason.enabled && (
+              <>
+                <div className="inline">
+                  <span>When a requester has</span>
+                  <input
+                    className="input tabular"
+                    type="number"
+                    min={0}
+                    max={100}
+                    style={{ width: 80 }}
+                    aria-label="Episodes left"
+                    value={draft.nextSeason.episodesLeft}
+                    onChange={(e) => set({ nextSeason: { ...draft.nextSeason, episodesLeft: Math.min(100, Math.max(0, Number(e.target.value))) } })}
+                  />
+                  <span>{draft.nextSeason.episodesLeft === 1 ? 'episode' : 'episodes'} of a season left to watch</span>
+                </div>
+                <label className="inline row-sub">
+                  <input type="checkbox" checked={draft.nextSeason.search} onChange={(e) => set({ nextSeason: { ...draft.nextSeason, search: e.target.checked } })} /> Search for it right away (otherwise Sonarr only picks up new releases)
+                </label>
+              </>
+            )}
+          </div>
+        </Section>
+      )}
 
       <Section title="Steps" footer="Steps run from the top. Waits count from when the last person needed finished watching, then from the step before.">
         {draft.steps.map((s, i) => (
@@ -1221,10 +1263,13 @@ function LogView() {
 export function TitleJanitor({ titleId, title, mediaType }: { titleId: number; title: string; mediaType: 'movie' | 'tv' }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const q = useQuery({ queryKey: ['janitor-title', titleId], queryFn: () => get<{ candidates: CandidateView[]; exclusions: ExclusionView[]; requested: boolean }>(`/admin/janitor/titles/${titleId}`) });
+  const q = useQuery({
+    queryKey: ['janitor-title', titleId],
+    queryFn: () => get<{ candidates: CandidateView[]; exclusions: ExclusionView[]; requested: boolean; addedSeasons: { season: number; requesters: string[]; monitored: boolean; addedAt: string }[] }>(`/admin/janitor/titles/${titleId}`),
+  });
   const [keep, setKeep] = useState(false);
   if (!q.data) return null;
-  const { candidates, exclusions, requested } = q.data;
+  const { candidates, exclusions, requested, addedSeasons } = q.data;
   const active = candidates.filter((c) => c.state !== 'done');
   if (!requested && active.length === 0 && exclusions.length === 0) return null;
   const refresh = () => qc.invalidateQueries({ queryKey: ['janitor-title', titleId] });
@@ -1256,6 +1301,16 @@ export function TitleJanitor({ titleId, title, mediaType }: { titleId: number; t
             <Link className="btn btn-small btn-gray" to="/janitor">
               Open
             </Link>
+          </div>
+        ))}
+        {addedSeasons.map((a) => (
+          <div key={`added-${a.season}`} className="row">
+            <div className="row-main">
+              <div className="row-title">Season {a.season} · added to the request</div>
+              <div className="row-sub">
+                Counts as requested by {a.requesters.join(', ')} · {a.monitored ? 'monitored in Sonarr' : 'was already monitored'} {date(a.addedAt)}
+              </div>
+            </div>
           </div>
         ))}
         {exclusions.map((e) => (
