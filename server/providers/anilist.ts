@@ -22,7 +22,12 @@ export function parseAnilistUrl(input: string): { user: string; list: string | n
     return null;
   }
   if (!/^(www\.)?anilist\.co$/i.test(url.hostname)) return null;
-  const parts = url.pathname.split('/').filter(Boolean).map((p) => decodeURIComponent(p));
+  let parts: string[];
+  try {
+    parts = url.pathname.split('/').filter(Boolean).map((p) => decodeURIComponent(p));
+  } catch {
+    return null; // malformed percent-encoding
+  }
   if (parts[0]?.toLowerCase() !== 'user' || !parts[1] || !ANILIST_USER.test(parts[1])) return null;
   if (parts[2] && parts[2].toLowerCase() !== 'animelist') return null;
   const list = parts[3]?.trim();

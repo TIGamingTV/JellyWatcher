@@ -20,7 +20,12 @@ export function parseMdblistUrl(input: string): { user: string; slug: string } |
     return null;
   }
   if (!/^(www\.)?mdblist\.com$/i.test(url.hostname)) return null;
-  const parts = url.pathname.split('/').filter(Boolean).map((p) => decodeURIComponent(p));
+  let parts: string[];
+  try {
+    parts = url.pathname.split('/').filter(Boolean).map((p) => decodeURIComponent(p));
+  } catch {
+    return null; // malformed percent-encoding
+  }
   if (parts[0] !== 'lists' || !parts[1] || !parts[2] || !SLUG.test(parts[1]) || !SLUG.test(parts[2]) || ['json', 'csv'].includes(parts[2])) return null;
   return { user: parts[1], slug: parts[2] };
 }

@@ -13,7 +13,7 @@ import { syncJellyfin } from '../server/sync/jellyfin';
 import { syncSeerr } from '../server/sync/seerr';
 import { triggerJob } from '../server/sync/scheduler';
 import { syncMetadata } from '../server/sync/metadata';
-import { ALICE_JF, BOB_JF, HEAT_JF, IMDB_HEADER_LIST, IMDB_LIST, JF, SEERR, SEV_JF, createMocks } from './helpers/mocks';
+import { ALICE_JF, BOB_JF, HEAT_JF, IMDB_HEADER_LIST, IMDB_LIST, JF, SEERR, SEV_JF, TRAKT_PRIVATE, createMocks } from './helpers/mocks';
 import { mirrorPayload } from '../server/services/mirrors';
 
 const SETUP_CODE = 'ABCDE-12345';
@@ -182,6 +182,24 @@ describe('end-to-end against mocked Jellyfin, Seerr and Trakt', () => {
     // Re-syncing is idempotent.
     const again = await admin.post(`/api/lists/${traktListId}/sync`);
     expect(again.data.result).toMatchObject({ added: 0, removed: 0, total: 3 });
+  });
+
+  it('imports one of your own private Trakt lists from "Your lists" through the owner route', async () => {
+    const me = await admin.get('/api/auth/me');
+    ctx.connections.save(me.data.user.id, 'trakt', {
+      accountName: 'me',
+      config: { slug: 'me' },
+      secrets: { accessToken: TRAKT_PRIVATE.token, refreshToken: 'r', expiresAt: new Date(Date.now() + 86400_000).toISOString() },
+    });
+    try {
+      const r = await admin.post('/api/lists/trakt', { mode: 'owned', traktId: 888 });
+      expect(r.status).toBe(200);
+      expect(r.data.list).toMatchObject({ provider: 'trakt', kind: 'owned', name: 'My Private List', itemCount: 3, lastStatus: 'ok' });
+      expect(mocks.state.traktCalls.some((c) => c.startsWith('/lists/888'))).toBe(false);
+      expect((await admin.del(`/api/lists/${r.data.list.id}`)).status).toBe(200);
+    } finally {
+      ctx.connections.remove(me.data.user.id, 'trakt');
+    }
   });
 
   let uploadListId: number;

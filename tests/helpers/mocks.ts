@@ -8,6 +8,10 @@ export const SEERR = { url: 'http://seerr.test:5055', key: 'seerr-secret-key' };
 export const SONARR = { url: 'http://sonarr.test:8989', key: 'sonarr-secret-key' };
 export const RADARR = { url: 'http://radarr.test:7878', key: 'radarr-secret-key' };
 export const HA = { url: 'http://ha.test:8123', token: 'ha-long-lived-token', service: 'mobile_app_test' };
+export const TRAKT_PRIVATE = {
+  token: 'trakt-user-token',
+  list: { name: 'My Private List', privacy: 'private', item_count: 3, likes: 0, ids: { trakt: 888, slug: 'my-private-list' }, user: { username: 'me', name: 'Me', ids: { slug: 'me' } } },
+};
 const GB = 1024 ** 3;
 export const ALICE_JF = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
 export const BOB_JF = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
@@ -414,6 +418,11 @@ export function createMocks() {
       if (url.pathname === '/users/sean/lists/mann' || url.pathname === '/lists/777') return json(traktList);
       if (url.pathname === '/lists/777/items') {
         return json(traktItems, 200, { 'x-pagination-page': '1', 'x-pagination-page-count': '1', 'x-pagination-item-count': '4' });
+      }
+      // A private list: only its owner's route with the owner's token serves it (/lists/888 is a 404).
+      if (url.pathname.startsWith('/users/me/lists/888') && headers.get('authorization') === `Bearer ${TRAKT_PRIVATE.token}`) {
+        if (url.pathname === '/users/me/lists/888') return json(TRAKT_PRIVATE.list);
+        if (url.pathname === '/users/me/lists/888/items') return json(traktItems, 200, { 'x-pagination-page': '1', 'x-pagination-page-count': '1', 'x-pagination-item-count': '3' });
       }
       if (url.pathname.startsWith('/users/private')) return new Response('', { status: 404 });
       return new Response('', { status: 404 });

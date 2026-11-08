@@ -263,6 +263,9 @@ export async function sourceRoutes(app: FastifyInstance, { ctx, users, quickConn
           ref = own ? { mode: 'watchlist' } : { mode: 'public_watchlist', user: listRef.user };
           return importAndSync(u, info, ref, conn?.id);
         }
+      } else if (body.mode === 'owned' && mySlug && token) {
+        // /lists/{id} only serves public lists; the owner's route also reads private ones.
+        listRef = { kind: 'user_list' as const, user: mySlug, list: String(body.traktId) };
       } else listRef = { kind: 'list_id' as const, id: String(body.traktId) };
       let json;
       try {
