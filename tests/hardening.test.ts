@@ -16,6 +16,8 @@ import { parseSimklExport } from '../server/providers/simkl';
 import { SecretBox } from '../server/security/crypto';
 import { Matcher } from '../server/services/matcher';
 import { TitleService } from '../server/services/titles';
+import { cleanup } from '../server/sync/scheduler';
+import { Client, SETUP_CODE, testApp } from './helpers/app';
 
 const PROXY = '10.0.0.2';
 const DIRECT = '100.64.0.7'; // e.g. a Tailscale peer
@@ -203,5 +205,26 @@ describe('match decisions', () => {
     await matcher.run(null);
     expect(status(a)).toMatchObject({ s: 'matched' });
     expect(status(m).s).toBe('ignored');
+  });
+});
+
+describe('cleanup of unused titles', () => {
+  it('keeps titles someone marked watched or not watching', async () => {
+    const t = await testApp();
+    try {
+      const admin = new Client(t.app);
+      await admin.post('/api/setup', { setupCode: SETUP_CODE, username: 'admin', password: 'a-long-password' });
+      const userId = (t.ctx.db.prepare('SELECT id FROM users').get() as { id: number }).id;
+      const [watched, skipped, unused] = [1, 2, 3].map((n) => t.ctx.titles.ensure({ mediaType: 'movie', tmdbId: n, title: `Movie ${n}`, source: 'tmdb' }));
+      t.ctx.watches.mark(userId, watched!, {}, nowIso());
+      t.ctx.watches.skip(userId, skipped!, {});
+      t.ctx.db.prepare('UPDATE titles SET updated_at = ?').run(new Date(Date.now() - 30 * 86400_000).toISOString());
+      expect(cleanup(t.ctx).stats.titles).toBe(1);
+      expect((t.ctx.db.prepare('SELECT id FROM titles ORDER BY id').all() as { id: number }[]).map((r) => r.id)).toEqual([watched, skipped]);
+      expect(t.ctx.db.prepare('SELECT COUNT(*) AS n FROM manual_watches').get()).toEqual({ n: 1 });
+      expect(unused).toBeGreaterThan(0);
+    } finally {
+      await t.close();
+    }
   });
 });
