@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/TIGamingTV/JellyWatcher/main/assets/jellyfin-plugin.png",
     "versions": [
       {
+        "version": "1.2.4.0",
+        "changelog": "JellyWatcher 1.2.4: https://github.com/TIGamingTV/JellyWatcher/releases/tag/v1.2.4",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/TIGamingTV/JellyWatcher/releases/download/v1.2.4/jellywatcher_1.2.4.0.zip",
+        "checksum": "f17532e3d35835d884393b6ec8e8d910",
+        "timestamp": "2026-11-08T01:00:26Z"
+      },
+      {
         "version": "1.2.3.0",
         "changelog": "JellyWatcher 1.2.3: https://github.com/TIGamingTV/JellyWatcher/releases/tag/v1.2.3",
         "targetAbi": "12.0.0.0",
