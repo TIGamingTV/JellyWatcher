@@ -111,7 +111,7 @@ export class Scheduler {
   }
 }
 
-function cleanup(ctx: AppContext) {
+export function cleanup(ctx: AppContext) {
   const now = new Date().toISOString();
   const sessions = ctx.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now).changes;
   ctx.jobs.prune(90);
@@ -126,6 +126,8 @@ function cleanup(ctx: AppContext) {
          AND id NOT IN (SELECT title_id FROM match_resolutions WHERE title_id IS NOT NULL)
          AND id NOT IN (SELECT title_id FROM watch_history)
          AND id NOT IN (SELECT title_id FROM watched_episodes)
+         AND id NOT IN (SELECT title_id FROM manual_watches)
+         AND id NOT IN (SELECT title_id FROM skipped_entries)
          AND id NOT IN (SELECT title_id FROM janitor_exclusions)
          AND updated_at < ?`,
     )
