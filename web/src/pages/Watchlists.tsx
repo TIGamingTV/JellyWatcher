@@ -454,7 +454,8 @@ function ListDetail() {
           </p>
         )}
       </div>
-      <ListContent list={l} onDisplay={(display) => update({ display })} onDiscover={() => setDiscovering(true)} />
+      {/* Keyed: Duplicate and New List open another list in this same mounted page. */}
+      <ListContent key={l.id} list={l} onDisplay={(display) => update({ display })} onDiscover={() => setDiscovering(true)} />
       <ConfirmSheet
         open={confirmDelete}
         onClose={() => setConfirmDelete(false)}

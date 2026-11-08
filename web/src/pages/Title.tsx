@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCheck, ChevronLeft, Eye, ExternalLink, ListPlus, Play, Plus, Star } from 'lucide-react';
 import { REQUEST_STATE_LABEL, type LifecycleStage } from '../../../shared/status';
@@ -88,10 +88,8 @@ export function TitlePage() {
 
   if (q.isLoading) return <CenterLoading />;
   if (q.isError || !d) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
-  if (d.title.id !== id) {
-    navigate(`/titles/${d.title.id}`, { replace: true });
-    return null;
-  }
+  // A merged title: navigate() during render is ignored on the first render (e.g. cached data).
+  if (d.title.id !== id) return <Navigate to={`/titles/${d.title.id}`} replace />;
   const t = d.title;
   const s = d.status;
   const facts = [t.year, t.mediaType === 'tv' ? 'TV Show' : 'Movie', runtime(t.runtime), t.genres.slice(0, 3).join(', ')].filter(Boolean);
