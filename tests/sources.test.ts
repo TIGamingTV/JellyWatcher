@@ -191,8 +191,13 @@ describe('anime', () => {
     expect(await stale.load()).toBe(true);
     expect(stale.lookup({ mal: 1 })?.tmdbTv).toBe(7);
 
-    const none = new AnimeIds({ fetchImpl: async () => { throw new TypeError('offline'); } });
+    let noneCalls = 0;
+    const none = new AnimeIds({ fetchImpl: async () => { noneCalls++; throw new TypeError('offline'); } });
     expect(await none.load()).toBe(false);
+    // Backs off after a failure even with nothing loaded, rather than retrying on every call.
+    const afterFirst = noneCalls;
+    expect(await none.load()).toBe(false);
+    expect(noneCalls).toBe(afterFirst);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

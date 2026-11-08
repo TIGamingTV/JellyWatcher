@@ -30,9 +30,15 @@ export function parseMalListUrl(input: string): { user: string; status: number }
   }
   if (!/^(www\.)?myanimelist\.net$/i.test(url.hostname)) return null;
   const m = url.pathname.match(/^\/animelist\/([^/]+)\/?$/i);
-  if (!m || !MAL_USER.test(decodeURIComponent(m[1]!))) return null;
+  let user: string;
+  try {
+    user = m ? decodeURIComponent(m[1]!) : '';
+  } catch {
+    return null; // malformed percent-encoding
+  }
+  if (!MAL_USER.test(user)) return null;
   const status = Number(url.searchParams.get('status') ?? 6);
-  return { user: decodeURIComponent(m[1]!), status: MAL_STATUS[status] ? status : 6 };
+  return { user, status: MAL_STATUS[status] ? status : 6 };
 }
 
 const Entry = z.object({

@@ -9,6 +9,9 @@ import { encodeSeerrQuery, seerrCan } from '../server/providers/seerr';
 import { HttpClient, normalizeServiceUrl, parseRetryAfter } from '../server/http/client';
 import { TmdbClient } from '../server/providers/tmdb';
 import { ProviderError } from '../server/http/errors';
+import { parseMdblistUrl } from '../server/providers/mdblist';
+import { parseAnilistUrl } from '../server/providers/anilist';
+import { parseMalListUrl } from '../server/providers/myanimelist';
 
 describe('Trakt', () => {
   it('parses list entries and skips unsupported types', () => {
@@ -51,6 +54,13 @@ describe('Trakt', () => {
     expect(parseTraktListUrl('https://evil.example/users/a/lists/b')).toBeNull();
     expect(parseTraktListUrl('https://trakt.tv.evil.example/users/a/lists/b')).toBeNull();
     expect(parseTraktListUrl('not a url')).toBeNull();
+  });
+
+  it('rejects links with malformed percent-encoding instead of throwing', () => {
+    expect(parseTraktListUrl('https://trakt.tv/users/100%/lists/x')).toBeNull();
+    expect(parseMdblistUrl('https://mdblist.com/lists/a%zz/b')).toBeNull();
+    expect(parseAnilistUrl('https://anilist.co/user/abc/animelist/50%')).toBeNull();
+    expect(parseMalListUrl('https://myanimelist.net/animelist/ab%E0')).toBeNull();
   });
 
   it('computes token expiry from expires_in', () => {

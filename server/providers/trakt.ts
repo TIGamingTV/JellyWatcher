@@ -91,7 +91,12 @@ export function parseTraktListUrl(input: string): TraktListRef | null {
     return null;
   }
   if (!/^(www\.|app\.)?trakt\.tv$/i.test(url.hostname)) return null;
-  const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  let parts: string[];
+  try {
+    parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return null; // malformed percent-encoding
+  }
   const safe = (s: string | undefined) => (s && /^[\w.\-~@]+$/.test(s) ? s : undefined);
   if (parts[0] === 'users' && parts[2] === 'lists' && safe(parts[1]) && safe(parts[3])) {
     return { kind: 'user_list', user: parts[1], list: parts[3] };

@@ -18,6 +18,7 @@ import type { SourceItem } from './types.js';
 export const ANIME_LIST_URL = 'https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json';
 const MAX_AGE_MS = 7 * 86400_000;
 const RETRY_AFTER_FAILURE_MS = 3600_000;
+const RETRY_UNLOADED_MS = 5 * 60_000;
 
 export interface AnimeMapping {
   tmdbTv?: number;
@@ -109,7 +110,9 @@ export class AnimeIds {
     const file = this.opts.cacheFile;
     const age = this.cacheAge();
     if (file && age !== null && age < MAX_AGE_MS && this.readCache(file)) return true;
-    if (Date.now() - this.failedAt > RETRY_AFTER_FAILURE_MS || !this.loaded) {
+    // Without any mapping retry sooner, but still back off: an unreachable host would otherwise
+    // hold up every anime import and sync for the full download timeout.
+    if (Date.now() - this.failedAt > (this.loaded ? RETRY_AFTER_FAILURE_MS : RETRY_UNLOADED_MS)) {
       try {
         const res = await this.http.get<unknown>(this.source.pathname);
         const rows = compactAnimeList(res.data);
