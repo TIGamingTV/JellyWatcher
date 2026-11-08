@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AppContext } from '../server/context';
 import { inWindow, runJanitor } from '../server/janitor/engine';
 import { syncJellyfin } from '../server/sync/jellyfin';
@@ -560,6 +560,161 @@ describe('Janitor: titles deleted outside the Janitor', () => {
     await syncSeerr(ctx);
     expect(ctx.db.prepare('SELECT request_status, last_error FROM requests WHERE seerr_request_id = 900').get()).toEqual({ request_status: null, last_error: 'This request no longer exists in Seerr.' });
     expect((await admin.get(`/api/admin/janitor/titles/${heatId}`)).data.requested).toBe(false);
+  });
+});
+
+describe('Janitor: what an administrator decides always wins', () => {
+  type Setup = Awaited<ReturnType<typeof setup>>;
+  const SEASON_STEPS = [
+    { type: 'sonarr_delete_season', unmonitor: true },
+    { type: 'gate', condition: 'series_ended', otherwise: 'recheck' },
+    { type: 'sonarr_delete_series', importListExclusion: false },
+  ];
+  const seasonRule = (steps: unknown[], mode = 'auto') => ({ name: 'Seasons', enabled: true, mediaType: 'tv', unit: 'season', mode, steps });
+  let s: Setup | null = null;
+
+  /** Severance requested (seasons 1 and 2); Alice watched season 1. */
+  async function setup(mocks = createMocks(), fetchImpl: typeof fetch = mocks.fetch, before?: () => void) {
+    vi.stubGlobal('fetch', fetchImpl);
+    const t = await testApp({ JW_JANITOR: '1' });
+    const admin = new Client(t.app);
+    await admin.post('/api/setup', { setupCode: SETUP_CODE, username: 'admin', password: 'a-long-password', displayName: 'Alice' });
+    await admin.put('/api/integrations/jellyfin', { config: { url: JF.url }, secrets: { apiKey: JF.key } });
+    await admin.put('/api/integrations/seerr', { config: { url: SEERR.url }, secrets: { apiKey: SEERR.key } });
+    await admin.put('/api/integrations/sonarr', { config: { url: SONARR.url }, secrets: { apiKey: SONARR.key } });
+    await admin.post('/api/connections/jellyfin', { username: 'alice', password: 'alicepw' });
+    await settle(t.ctx);
+    before?.();
+    mocks.state.seerrMedia.set('tv:95396', { id: 2, tmdbId: 95396, tvdbId: 371980, mediaType: 'tv', status: 4 });
+    mocks.state.seerrRequests.push({ id: 501, status: 2, is4k: false, media: { id: 2, tmdbId: 95396, tvdbId: 371980, mediaType: 'tv', status: 4 }, requestedBy: { id: 1, displayName: 'Admin' }, seasons: [{ seasonNumber: 1 }, { seasonNumber: 2 }], createdAt: '2026-08-01T00:00:00.000Z' });
+    await syncJellyfin(t.ctx);
+    await syncSeerr(t.ctx);
+    await syncJellyfin(t.ctx);
+    const sevId = (t.ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 95396').get() as { id: number }).id;
+    const run = async (days: number) => {
+      const r = await runJanitor(t.ctx, { now: new Date(Date.now() + days * DAY) });
+      await settle(t.ctx);
+      return r;
+    };
+    const rule = async (body: unknown) => (await admin.post('/api/admin/janitor/rules', body)).data.rule as { id: number };
+    const candidates = () => t.ctx.db.prepare('SELECT season, state, step_index, acted FROM janitor_candidates WHERE title_id = ?').all(sevId);
+    s = { t, admin, mocks, sevId, run, rule, candidates } as never;
+    return { t, admin, mocks, sevId, run, rule, candidates };
+  }
+  afterEach(async () => {
+    if (!s) return;
+    await settle(s.t.ctx);
+    await s.t.close();
+    vi.unstubAllGlobals();
+    s = null;
+  });
+
+  it('keeping a season stops a cleanup that already deleted another one before it deletes the show', async () => {
+    const { admin, mocks, sevId, run, rule, candidates } = await setup();
+    await rule(seasonRule(SEASON_STEPS));
+    await run(0);
+    expect(mocks.state.sonarrFiles.filter((f) => f.seasonNumber === 1)).toHaveLength(0);
+    expect(candidates()).toEqual([{ season: 1, state: 'waiting', step_index: 1, acted: 1 }]);
+    await admin.post('/api/admin/janitor/exclusions', { titleId: sevId, season: 2 });
+    mocks.state.sonarrStatus = 'ended';
+    await run(1.1);
+    expect(mocks.state.sonarrSeriesDeleted).toBe(false);
+    expect(mocks.state.sonarrFiles).toHaveLength(10);
+    expect(candidates()).toEqual([]);
+  });
+
+  it('keeping the whole title stops cleanups that already deleted something at once', async () => {
+    const { admin, mocks, sevId, run, rule, candidates } = await setup();
+    await rule(seasonRule(SEASON_STEPS));
+    await run(0);
+    expect((await admin.post('/api/admin/janitor/exclusions', { titleId: sevId })).data.stopped).toBe(1);
+    mocks.state.sonarrStatus = 'ended';
+    await run(1.1);
+    expect(mocks.state.sonarrSeriesDeleted).toBe(false);
+    expect(candidates()).toEqual([]);
+  });
+
+  it('switching a rule to dry run stops real deletions of cleanups already under way', async () => {
+    const { admin, mocks, run, rule } = await setup();
+    const r = await rule(seasonRule(SEASON_STEPS));
+    await run(0);
+    expect((await admin.put(`/api/admin/janitor/rules/${r.id}`, seasonRule(SEASON_STEPS, 'dry_run'))).status).toBe(200);
+    mocks.state.sonarrStatus = 'ended';
+    await run(1.1);
+    expect(mocks.state.sonarrSeriesDeleted).toBe(false);
+  });
+
+  it('a cleanup kept while a run handles another one is not deleted by that run', async () => {
+    const mocks = createMocks();
+    let armed = false;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      // While the movie cleanup sends its notification, the administrator keeps the season.
+      if (armed && url.startsWith(HA.url) && url.includes('/api/services/notify')) {
+        armed = false;
+        const c = s!.t.ctx.db.prepare('SELECT id FROM janitor_candidates WHERE title_id = ?').get(s!.sevId) as { id: number };
+        expect((await s!.admin.post(`/api/admin/janitor/candidates/${c.id}/keep`, {})).status).toBe(200);
+      }
+      return mocks.fetch(input, init);
+    }) as typeof fetch;
+    const { admin, run, rule } = await setup(mocks, fetchImpl, () => {
+      mocks.state.seerrRequests.push({ id: 500, status: 2, is4k: false, media: { id: 1, tmdbId: 949, mediaType: 'movie', status: 5 }, requestedBy: { id: 1, displayName: 'Admin' }, seasons: [], createdAt: '2026-08-01T00:00:00.000Z' });
+    });
+    await admin.put('/api/integrations/radarr', { config: { url: RADARR.url }, secrets: { apiKey: RADARR.key } });
+    await admin.put('/api/integrations/homeassistant', { config: { url: HA.url, service: HA.service }, secrets: { token: HA.token } });
+    await rule({ name: 'Movies', enabled: true, mediaType: 'movie', unit: 'movie', mode: 'auto', steps: [{ type: 'notify', message: '{title}' }, { type: 'radarr_delete_movie', importExclusion: false }] });
+    await rule(seasonRule([{ type: 'sonarr_delete_season', unmonitor: true }]));
+    armed = true;
+    await run(0);
+    expect(armed).toBe(false);
+    expect(mocks.state.radarrMovies).toHaveLength(0);
+    expect(mocks.state.sonarrFiles.filter((f) => f.seasonNumber === 1)).toHaveLength(9);
+  });
+
+  it('changed steps restart a cleanup that already deleted something instead of skipping ahead', async () => {
+    const { admin, mocks, run, rule, candidates } = await setup();
+    const r = await rule(seasonRule([{ type: 'notify', message: 'a' }, { type: 'notify', message: 'b' }, ...SEASON_STEPS]));
+    await run(0);
+    expect(candidates()).toEqual([{ season: 1, state: 'waiting', step_index: 3, acted: 1 }]);
+    // Index 3 of the new steps would be "delete the show", past the new gate.
+    const steps = [SEASON_STEPS[0], SEASON_STEPS[1], { type: 'gate', condition: 'no_files_left', otherwise: 'stop' }, SEASON_STEPS[2]];
+    await admin.put(`/api/admin/janitor/rules/${r.id}`, seasonRule(steps));
+    await settle(s!.t.ctx);
+    // The save runs the Janitor: it went through the steps again and waits at the first gate.
+    expect(mocks.state.sonarrSeriesDeleted).toBe(false);
+    expect(candidates()).toEqual([{ season: 1, state: 'waiting', step_index: 1, acted: 1 }]);
+    // Steps after its place changed only: it stays where it is.
+    await admin.put(`/api/admin/janitor/rules/${r.id}`, seasonRule(steps.slice(0, 2)));
+    expect(candidates()).toEqual([{ season: 1, state: 'waiting', step_index: 1, acted: 1 }]);
+  });
+
+  it('a requested season that is not downloaded yet keeps the show', async () => {
+    const mocks = createMocks();
+    const { run, rule } = await setup(mocks, mocks.fetch, () => {
+      // Season 2: requested and monitored in Sonarr, nothing downloaded yet.
+      mocks.state.sonarrFiles = mocks.state.sonarrFiles.filter((f) => f.seasonNumber === 1);
+      mocks.state.sevEpisodes = mocks.state.sevEpisodes.filter((e) => e.ParentIndexNumber === 1);
+      mocks.state.sonarrStatus = 'ended';
+    });
+    await rule(seasonRule([...SEASON_STEPS.slice(0, 2), { type: 'gate', condition: 'no_files_left', otherwise: 'stop' }, SEASON_STEPS[2], { type: 'seerr_delete_request' }]));
+    await run(0);
+    expect(mocks.state.sonarrFiles).toHaveLength(0);
+    expect(mocks.state.sonarrSeriesDeleted).toBe(false);
+    expect(mocks.state.seerrCalls.filter((c) => c.method === 'DELETE')).toEqual([]);
+    // Whole-show rules wait for it too.
+    const preview = (await s!.admin.post('/api/admin/janitor/preview', { rule: { name: 'Shows', enabled: true, mediaType: 'tv', unit: 'series', mode: 'auto', steps: [SEASON_STEPS[2]] } })).data.rows;
+    expect(preview.map((x: any) => [x.status, x.reason])).toEqual([['incomplete', 'Season 2 is not downloaded yet.']]);
+  });
+
+  it('a request missing from Seerr’s list is only dropped once Seerr says it is gone', async () => {
+    const { t, mocks } = await setup();
+    mocks.state.seerrListHidden.add(501);
+    await syncSeerr(t.ctx);
+    expect(t.ctx.db.prepare('SELECT request_status FROM requests WHERE seerr_request_id = 501').get()).toEqual({ request_status: 2 });
+    mocks.state.seerrRequests = [];
+    await new Promise((r) => setTimeout(r, 5)); // a later sync
+    await syncSeerr(t.ctx);
+    expect(t.ctx.db.prepare('SELECT request_status FROM requests WHERE seerr_request_id = 501').get()).toEqual({ request_status: null });
   });
 });
 

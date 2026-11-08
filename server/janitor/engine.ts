@@ -73,8 +73,9 @@ export async function loadArr(ctx: AppContext, rules: Pick<JanitorRule, 'mediaTy
   return arrIndex(series, movies, errors);
 }
 
+/** `season` -1 stands for the whole title (movies, whole shows): keeping any season of it counts. */
 function excludedBy(ex: ExclusionRow[] | undefined, ruleId: number, season: number): ExclusionRow | null {
-  return ex?.find((e) => (e.rule_id === null || e.rule_id === ruleId) && (e.season === -1 || e.season === season)) ?? null;
+  return ex?.find((e) => (e.rule_id === null || e.rule_id === ruleId) && (e.season === -1 || season === -1 || e.season === season)) ?? null;
 }
 
 function matches(rule: JanitorRule, unit: Unit): boolean {
@@ -294,7 +295,9 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
         stats.created++;
         store.log({ candidateId: id, ruleId: rule.id, ruleName: rule.name, titleId: unit.titleId, title: unit.title, season: unit.season, step: 'start', outcome: 'info', message: `Everyone needed finished it (${formatDate(row.eligibleAt)}).`, at: nowIsoStr });
       } else if (existing) {
-        if (existing.acted || existing.state === 'done' || existing.state === 'running' || arrFailed(rule)) {
+        // Kept since: it stops even after deleting something (what is gone stays gone).
+        const kept = row.status === 'excluded' && existing.state !== 'done' && existing.state !== 'running';
+        if (!kept && (existing.acted || existing.state === 'done' || existing.state === 'running' || arrFailed(rule))) {
           seen.add(existing.id);
           continue;
         }
@@ -332,13 +335,21 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
   // Freshness of the data is about the real clock, whatever time the run is evaluated for.
   const jellyfinFresh = jf.status === 'ok' && jf.lastOkAt !== null && Date.now() - Date.parse(jf.lastOkAt) <= Math.max(staleMs, 3600_000);
   const windowOpen = inWindow(now, settings['janitor.windowStart'], settings['janitor.windowEnd']);
-  const allRules = new Map(store.rules().map((r) => [r.id, r]));
   let actions = 0;
   let deletedSomething = false;
 
-  const due = store.candidates(['waiting']).filter((c) => !c.next_run_at || Date.parse(c.next_run_at) <= now.getTime());
-  for (const c of due) {
-    const rule = allRules.get(c.rule_id);
+  const isDue = (c: CandidateRow) => !c.next_run_at || Date.parse(c.next_run_at) <= now.getTime();
+  const due = store.candidates(['waiting']).filter(isDue);
+  for (const { id } of due) {
+    // Earlier candidates can take a while (Sonarr, Home Assistant): read everything again, so whatever
+    // an administrator did meanwhile (keep, approve, remove, edit or turn off the rule, pause) counts.
+    if (ctx.settings.get('janitor.paused')) {
+      stats.blocked = 'paused';
+      break;
+    }
+    const c = store.candidate(id);
+    if (!c || c.state !== 'waiting' || !isDue(c)) continue;
+    const rule = store.rule(c.rule_id);
     if (!rule?.enabled) continue;
     const ctxt = parseJson<CandidateContext>(c.context, {});
     const title = ctxt.title ?? `Title ${c.title_id}`;
@@ -349,12 +360,14 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
       c.context = JSON.stringify(ctxt);
       store.saveCandidate(c);
     };
-    const dry = c.dry_run === 1;
+    // A rule switched to dry run stops deleting at once, also for cleanups that already deleted something.
+    const dry = c.dry_run === 1 || rule.mode === 'dry_run';
     const prefix = dry ? '[Dry run] ' : '';
     c.state = 'running';
     save();
     let finished = false;
     let stop = false;
+    let kept = false;
 
     while (!stop) {
       const step = rule.steps[c.step_index];
@@ -445,7 +458,15 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
           break;
         }
         default: {
-          // Destructive steps.
+          // Destructive steps. Only a season's own files spare the rest of the show; everything else
+          // removes the whole title, so keeping any of it stops the cleanup.
+          const ex = excludedBy(store.activeExclusions(now).get(c.title_id), rule.id, step.type === 'sonarr_delete_season' ? c.season : -1);
+          if (ex) {
+            log('keep', 'info', `Kept, so it stopped before: ${STEP_LABEL[step.type]}.`);
+            kept = true;
+            stop = true;
+            break;
+          }
           if (rule.mode === 'approval' && !c.approved_at && !dry) {
             c.state = 'awaiting_approval';
             c.next_run_at = null;
@@ -475,15 +496,18 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
           }
           try {
             const r = await execute(ctx, step, c);
-            actions++;
-            stats.deleted++;
             stats.steps++;
-            stats.freedBytes += r.freedBytes;
-            ctxt.freedBytes = (ctxt.freedBytes ?? 0) + r.freedBytes;
-            c.acted = 1;
+            // Nothing there to delete: no deletion to count against the limit, and nothing done yet.
+            if (!r.skipped) {
+              actions++;
+              stats.deleted++;
+              stats.freedBytes += r.freedBytes;
+              ctxt.freedBytes = (ctxt.freedBytes ?? 0) + r.freedBytes;
+              c.acted = 1;
+              deletedSomething = true;
+            }
             c.attempts = 0;
             c.last_error = null;
-            deletedSomething = true;
             log(step.type, r.skipped ? 'skipped' : 'ok', r.message, r.freedBytes);
             c.step_index++;
             c.anchor_at = now.toISOString();
@@ -508,6 +532,11 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
       if (!stop) save();
     }
 
+    if (kept) {
+      // Like Keep in the UI: the cleanup goes; once a time-limited keep ends, it starts over.
+      store.removeCandidate(c.id);
+      continue;
+    }
     if (finished) {
       c.state = 'done';
       c.next_run_at = null;
@@ -768,7 +797,14 @@ async function gate(ctx: AppContext, condition: 'series_ended' | 'no_files_left'
   }
   if (!series) return 'gone';
   if (condition === 'series_ended') return series.status === 'ended' ? 'yes' : 'no';
-  if (!sonarrSeasons(series).filter((s) => s.season > 0).every((s) => s.files === 0)) return 'no';
+  const seasons = sonarrSeasons(series).filter((s) => s.season > 0);
+  if (!seasons.every((s) => s.files === 0)) return 'no';
+  // Seasons the Janitor deleted itself are done, even when the step left them monitored.
+  const cleaned = new Set(
+    (ctx.db.prepare('SELECT season FROM janitor_candidates WHERE title_id = ? AND acted = 1 AND dry_run = 0').all(c.title_id) as { season: number }[]).map((r) => r.season),
+  );
+  // A monitored season with aired episodes but no files has not been downloaded yet: still to come.
+  if (seasons.some((s) => s.season !== c.season && s.monitored && s.episodes > 0 && !cleaned.has(s.season))) return 'no';
   // A season added to a request is still to come (maybe not downloaded yet) until the Janitor deleted it.
   const pending = ctx.db
     .prepare(

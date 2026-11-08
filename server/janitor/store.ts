@@ -118,11 +118,23 @@ export class JanitorStore {
         throw new ApiError(409, 'rule_busy', 'This rule is in the middle of deleting something. Wait until it finishes before changing what it handles.');
       }
     }
+    // Candidates that deleted something keep their place (step_index) in the steps. That place only
+    // means the same thing while the steps before it are unchanged; otherwise they start over from the
+    // first step (deletions done before are found already gone), never at a step they did not reach.
+    const acted = this.db.prepare("SELECT id, state, step_index FROM janitor_candidates WHERE rule_id = ? AND acted = 1 AND dry_run = 0 AND state != 'done'").all(id) as { id: number; state: CandidateState; step_index: number }[];
+    const samePrefix = (n: number) => JSON.stringify(cur.steps.slice(0, n)) === JSON.stringify(input.steps.slice(0, n));
+    const restart = acted.filter((c) => !samePrefix(c.step_index));
+    if (restart.some((c) => c.state === 'running')) throw new ApiError(409, 'rule_busy', 'This rule is running right now. Try again in a moment.');
     this.db.transaction(() => {
       this.db
         .prepare('UPDATE janitor_rules SET name = ?, enabled = ?, media_type = ?, unit = ?, mode = ?, match = ?, watchers = ?, next_season = ?, steps = ?, updated_at = ? WHERE id = ?')
         .run(input.name, input.enabled ? 1 : 0, input.mediaType, input.unit, input.mode, JSON.stringify(input.match), JSON.stringify(input.watchers), JSON.stringify(input.nextSeason), JSON.stringify(input.steps), nowIso(), id);
       this.resetCandidates(id);
+      const now = nowIso();
+      const stmt = this.db.prepare(
+        "UPDATE janitor_candidates SET state = 'waiting', step_index = 0, anchor_at = eligible_at, next_run_at = ?, approved_at = NULL, attempts = 0, last_error = NULL, context = json_remove(context, '$.approvalAsked', '$.parked'), updated_at = ? WHERE id = ?",
+      );
+      for (const c of restart) stmt.run(now, now, c.id);
     })();
     return this.rule(id)!;
   }

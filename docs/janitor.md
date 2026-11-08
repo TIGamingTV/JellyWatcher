@@ -125,7 +125,7 @@ same step.
 | **Wait** | Days and hours. The first wait counts from when the last person needed finished watching (their last play or mark); later ones from the step before. Switching a rule from dry run to Ask first or Automatic therefore does not restart the clock. |
 | **Notify in Home Assistant** | Sends your message. Placeholders: `{title}` (with the season), `{show}`, `{date}` of the next deletion (the waits until it, added up), `{requester}`, `{size}`, `{rule}`. |
 | **Wait for approval** | Stops until you approve it in the Overview. |
-| **Continue only if…** | *the show has ended in Sonarr*, or *no episode files are left* (specials aside, and every season the next-season option added to a request already deleted by the Janitor). Otherwise *stop here*, or *check again daily*. |
+| **Continue only if…** | *the show has ended in Sonarr*, or *no episode files are left* (specials aside; every season the next-season option added to a request already deleted by the Janitor; and no season monitored in Sonarr with aired episodes still to download, unless the Janitor deleted it). Otherwise *stop here*, or *check again daily*. |
 | **Delete season in Sonarr** | Optionally unmonitors the season first (so Sonarr does not download it again), then deletes the season's episode files. |
 | **Delete show in Sonarr** | Removes the show with all its files; optionally adds an import list exclusion. |
 | **Delete movie in Radarr** | Removes the movie with its files; optionally adds an import exclusion. |
@@ -147,15 +147,17 @@ same step.
 
 | Mode | Behaviour |
 | --- | --- |
-| **Dry run** | Every step runs, but deletions are only logged as “Would do”. Notifications say “[Dry run]”. |
+| **Dry run** | Every step runs, but deletions are only logged as “Would do”. Notifications say “[Dry run]”. Switching a rule to dry run also stops real deletions of its cleanups already under way. |
 | **Ask first** | Stops before the first deletion of each cleanup until you approve it (Overview › Approve). With a *Notify* step before the deletion, that warning also asks for the approval (“Approve or keep it in JellyWatcher.”) and you can approve right away, so it is deleted on the date it names; otherwise you get an *approval needed* notification when it waits. Either way, one message per cleanup. |
 | **Automatic** | Deletes when the steps allow. |
 
 Further safety nets:
 
 - **Keep:** in the Overview, a rule preview or a title's page, *Keep* excludes a title (or one season)
-  for every rule or one rule, forever or for 30, 90 or 365 days (Janitor › Kept). A cleanup that is
-  waiting stops at once. Deletions that already happened stay done.
+  for every rule or one rule, forever or for 30, 90 or 365 days (Janitor › Kept). Its cleanups stop
+  at once, also those that already deleted something; one that is running stops before its next
+  deletion. Deletions that already happened stay done. Keeping one season also protects the whole
+  show: steps that delete the show (or the movie, or the title in Seerr) do not run.
 - **Pause:** the switch in the Overview stops every step. Rules are still checked so you can see what
   is coming up.
 - **Deletion window:** deletions only run between two times of day (server time zone, `TZ`). Waits,
@@ -169,7 +171,9 @@ Further safety nets:
   changes, a cleanup that has not deleted anything yet is dropped (and starts over when it is ready
   again).
 - **Saving a rule** drops its cleanups that have not deleted anything (dry-run results included);
-  they start over on the next run with their timers still counted from when people finished.
+  they start over on the next run with their timers still counted from when people finished. Cleanups
+  that already deleted something keep their place if the steps before it are unchanged; otherwise
+  they start over from the first step (what they deleted counts as already gone).
 - **Failures** are retried after 15, 30, 60, 120 minutes; after 5 failed attempts the cleanup stops
   (Overview › Problems › Retry) and you get a notification. “Already gone” (404) counts as done.
 
@@ -184,9 +188,10 @@ sync, when you save or turn on a rule, and with **Run Now** (also in Settings �
 2. For each rule, top to bottom: build its units from Seerr requests, skip titles an earlier rule
    matched, kept titles, titles not in Jellyfin and incomplete seasons, then check who has watched
    them. Ready units get a cleanup; cleanups that are no longer ready are dropped unless they already
-   deleted something.
+   deleted something (kept ones are dropped either way).
 3. Unless paused, monitor next seasons for requesters close to the end of one, then run every cleanup that is due: its steps until a wait, an approval, a gate that
-   says stop or wait, the end, or a failure.
+   says stop or wait, the end, or a failure. Each cleanup and its rule are read again just before it
+   runs, so a Keep, an approval, a rule change or Pause made during a run counts for the rest of it.
 4. After real deletions, sync Seerr and Jellyfin.
 
 With the Janitor on, JellyWatcher also reads the episodes of requested shows from Jellyfin (not only

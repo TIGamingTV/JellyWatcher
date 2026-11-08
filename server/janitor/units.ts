@@ -170,8 +170,10 @@ export function buildUnits(ctx: AppContext, kind: JanitorUnit, arr: ArrSnapshot)
     const countOf = (season: number) => Math.max(sSeasons.get(season)?.total ?? 0, sizes.get(season) ?? 0, eps.filter(([s]) => s === season).length);
 
     if (kind === 'series') {
+      // seasonComplete passes seasons without files (not wanted); a monitored one with aired episodes is just not downloaded yet.
+      const notDownloaded = (s: SonarrSeason) => (s.monitored && s.files === 0 && s.episodes > 0 ? `Season ${s.season} is not downloaded yet.` : null);
       const incomplete =
-        [...sSeasons.values()].filter((s) => s.season > 0).map(seasonComplete).find((x) => x !== null) ??
+        [...sSeasons.values()].filter((s) => s.season > 0).map((s) => notDownloaded(s) ?? seasonComplete(s)).find((x) => x !== null) ??
         (series ? null : [...sizes].filter(([, n]) => n !== null).some(([s, n]) => eps.filter(([es]) => es === s).length < n!) ? 'Not every episode is in Jellyfin yet.' : null);
       units.push({
         ...base,
