@@ -592,8 +592,12 @@ function RulesList() {
     const j = i + dir;
     if (j < 0 || j >= ids.length) return;
     [ids[i], ids[j]] = [ids[j]!, ids[i]!];
-    await post('/admin/janitor/rules/reorder', { ids });
-    void refresh();
+    try {
+      await post('/admin/janitor/rules/reorder', { ids });
+      void refresh();
+    } catch (err) {
+      toast('error', errorText(err));
+    }
   };
   const previewAll = async () => {
     setPreviewing(true);
@@ -1208,6 +1212,7 @@ function LogView() {
   const [error, setError] = useState<unknown>(null);
   const load = async (before?: number) => {
     setLoading(true);
+    setError(null);
     try {
       const r = await get<{ entries: LogEntry[] }>(`/admin/janitor/log?limit=100${before ? `&before=${before}` : ''}`);
       setEntries((cur) => (before ? [...cur, ...r.entries] : r.entries));

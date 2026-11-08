@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { AlertTriangle, CircleAlert, Info, CheckCircle2, X, Search, RefreshCw } from 'lucide-react';
+import { errorText } from '../lib/api';
 import { dateTime, relativeTime } from '../lib/format';
+import { useToast } from '../lib/session';
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   useEffect(() => {
@@ -195,7 +197,16 @@ export function Sheet({ open, onClose, title, children, footer, wide }: { open: 
   );
 }
 
-export function ConfirmSheet({ open, title, message, confirmLabel, destructive, busy, onConfirm, onClose }: { open: boolean; title: string; message: ReactNode; confirmLabel: string; destructive?: boolean; busy?: boolean; onConfirm: () => void; onClose: () => void }) {
+export function ConfirmSheet({ open, title, message, confirmLabel, destructive, busy, onConfirm, onClose }: { open: boolean; title: string; message: ReactNode; confirmLabel: string; destructive?: boolean; busy?: boolean; onConfirm: () => unknown; onClose: () => void }) {
+  const toast = useToast();
+  // Callers often pass the raw API call; a failure would otherwise vanish as an unhandled rejection.
+  const confirm = async () => {
+    try {
+      await onConfirm();
+    } catch (err) {
+      toast('error', errorText(err));
+    }
+  };
   return (
     <Sheet
       open={open}
@@ -206,7 +217,7 @@ export function ConfirmSheet({ open, title, message, confirmLabel, destructive, 
           <button className="btn btn-gray" onClick={onClose}>
             Cancel
           </button>
-          <button className={`btn ${destructive ? 'btn-destructive' : 'btn-primary'}`} onClick={onConfirm} disabled={busy}>
+          <button className={`btn ${destructive ? 'btn-destructive' : 'btn-primary'}`} onClick={() => void confirm()} disabled={busy}>
             {busy && <Spinner />}
             {confirmLabel}
           </button>

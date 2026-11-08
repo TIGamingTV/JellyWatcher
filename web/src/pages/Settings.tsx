@@ -207,9 +207,13 @@ function Account() {
             <button
               className="btn btn-small btn-gray"
               onClick={async () => {
-                const r = await post<{ revoked: number }>('/auth/sessions/revoke-others');
-                toast('success', `Signed out ${r.revoked} other session(s).`);
-                void sessions.refetch();
+                try {
+                  const r = await post<{ revoked: number }>('/auth/sessions/revoke-others');
+                  toast('success', `Signed out ${r.revoked} other session(s).`);
+                  void sessions.refetch();
+                } catch (err) {
+                  toast('error', errorText(err));
+                }
               }}
             >
               Sign Out Others
@@ -259,6 +263,7 @@ function Users() {
     try {
       await patch(`/admin/users/${id}`, body);
       await qc.invalidateQueries({ queryKey: ['admin-users'] });
+      if ('jellyfinUserId' in body) void qc.invalidateQueries({ queryKey: ['jf-users'] });
       if (id === me.id) await qc.invalidateQueries({ queryKey: ['me'] });
     } catch (err) {
       toast('error', errorText(err));
@@ -288,9 +293,13 @@ function Users() {
             <button
               className="btn btn-small btn-gray"
               onClick={async () => {
-                const r = await post<{ linked: number }>('/admin/users/auto-link-seerr');
-                toast('success', r.linked ? `Linked ${r.linked} account(s) to Seerr.` : 'No new matches. Seerr users are matched by Jellyfin account.');
-                void users.refetch();
+                try {
+                  const r = await post<{ linked: number }>('/admin/users/auto-link-seerr');
+                  toast('success', r.linked ? `Linked ${r.linked} account(s) to Seerr.` : 'No new matches. Seerr users are matched by Jellyfin account.');
+                  void users.refetch();
+                } catch (err) {
+                  toast('error', errorText(err));
+                }
               }}
             >
               Match Seerr Users
@@ -419,6 +428,7 @@ function Users() {
             await del(`/admin/users/${deleting!.id}`);
             setDeleting(null);
             void users.refetch();
+            void qc.invalidateQueries({ queryKey: ['jf-users'] });
           } catch (err) {
             toast('error', errorText(err));
           }
@@ -440,7 +450,9 @@ interface JfUser {
 function ImportJellyfinSheet({ users, onClose, onDone }: { users: JfUser[]; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const available = users.filter((u) => !u.linked && !u.disabled);
-  const [chosen, setChosen] = useState<Set<string>>(new Set(available.map((u) => u.id)));
+  // Everyone available is preselected, also when the Jellyfin users arrive after the sheet opened.
+  const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
+  const chosen = new Set(available.filter((u) => !unchecked.has(u.id)).map((u) => u.id));
   const [busy, setBusy] = useState(false);
   const run = async () => {
     setBusy(true);
@@ -486,10 +498,10 @@ function ImportJellyfinSheet({ users, onClose, onDone }: { users: JfUser[]; onCl
                   type="checkbox"
                   checked={chosen.has(u.id)}
                   onChange={(e) => {
-                    const next = new Set(chosen);
-                    if (e.target.checked) next.add(u.id);
-                    else next.delete(u.id);
-                    setChosen(next);
+                    const next = new Set(unchecked);
+                    if (e.target.checked) next.delete(u.id);
+                    else next.add(u.id);
+                    setUnchecked(next);
                   }}
                   style={{ width: 18, height: 18, accentColor: 'var(--accent-fill)' }}
                 />
@@ -534,6 +546,7 @@ function CreateUserSheet({ jfUsers, onClose }: { jfUsers: { id: string; name: st
       });
       toast('success', 'Person added.');
       void qc.invalidateQueries({ queryKey: ['admin-users'] });
+      void qc.invalidateQueries({ queryKey: ['jf-users'] });
       onClose();
     } catch (err) {
       setError(errorText(err));

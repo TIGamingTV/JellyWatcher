@@ -308,6 +308,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
 function WebhookSection({ target }: { target: 'seerr' | 'jellyfin' }) {
   const q = useQuery({ queryKey: ['webhook'], queryFn: () => get<{ token: string }>('/integrations/webhook') });
   const qc = useQueryClient();
+  const toast = useToast();
   if (!q.data) return null;
   const url = `${window.location.origin}/api/webhooks/${target}`;
   return (
@@ -328,8 +329,12 @@ function WebhookSection({ target }: { target: 'seerr' | 'jellyfin' }) {
         <button
           className="btn btn-small btn-gray"
           onClick={async () => {
-            await post('/integrations/webhook/regenerate');
-            void qc.invalidateQueries({ queryKey: ['webhook'] });
+            try {
+              await post('/integrations/webhook/regenerate');
+              void qc.invalidateQueries({ queryKey: ['webhook'] });
+            } catch (err) {
+              toast('error', errorText(err));
+            }
           }}
         >
           Regenerate
@@ -688,16 +693,24 @@ function TraktPage() {
   const [adding, setAdding] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const timer = useRef<number | null>(null);
+  // Bumped on start, cancel and unmount: a poll that was in flight then must not schedule the next one.
+  const pollRun = useRef(0);
   const conn = sources.data?.sources.find((s) => s.id === 'trakt')?.connection ?? null;
 
-  useEffect(() => () => {
+  const stopPolling = () => {
+    pollRun.current++;
     if (timer.current) window.clearTimeout(timer.current);
-  }, []);
+  };
+  useEffect(() => stopPolling, []);
 
-  const poll = (delay: number) => {
+  const poll = (delay: number, run: number) => {
     timer.current = window.setTimeout(async () => {
       try {
         const r = await post<{ status: string; retryIn?: number }>('/connections/trakt/poll');
+        if (run !== pollRun.current) {
+          if (r.status === 'authorized') void qc.invalidateQueries({ queryKey: ['sources'] });
+          return;
+        }
         if (r.status === 'authorized') {
           setDevice(null);
           setStatus(null);
@@ -706,10 +719,11 @@ function TraktPage() {
           invalidate();
           return;
         }
-        if (r.status === 'pending') return poll((r.retryIn ?? 5) * 1000);
+        if (r.status === 'pending') return poll((r.retryIn ?? 5) * 1000, run);
         setDevice(null);
         setError(r.status === 'expired' ? 'The code expired. Start again.' : r.status === 'denied' ? 'Access was denied on Trakt.' : 'Sign-in could not be completed. Start again.');
       } catch (err) {
+        if (run !== pollRun.current) return;
         setDevice(null);
         setError(errorText(err));
       }
@@ -721,7 +735,8 @@ function TraktPage() {
       const r = await post<{ userCode: string; verificationUrl: string; expiresIn: number; interval: number }>('/connections/trakt/device');
       setDevice({ userCode: r.userCode, verificationUrl: r.verificationUrl, expiresAt: Date.now() + r.expiresIn * 1000 });
       setStatus('Waiting for you to approve on Trakt…');
-      poll(r.interval * 1000);
+      stopPolling();
+      poll(r.interval * 1000, pollRun.current);
     } catch (err) {
       setError(errorText(err));
     }
@@ -820,7 +835,7 @@ function TraktPage() {
                 <button
                   className="btn btn-gray btn-small"
                   onClick={() => {
-                    if (timer.current) window.clearTimeout(timer.current);
+                    stopPolling();
                     setDevice(null);
                   }}
                 >
@@ -928,10 +943,14 @@ function LetterboxdPage() {
                 className="btn btn-plain"
                 style={{ color: 'var(--red)' }}
                 onClick={async () => {
-                  await del('/connections/letterboxd');
-                  setUsername('');
-                  await qc.invalidateQueries({ queryKey: ['sources'] });
-                  void qc.invalidateQueries({ queryKey: ['lists'] });
+                  try {
+                    await del('/connections/letterboxd');
+                    setUsername('');
+                    await qc.invalidateQueries({ queryKey: ['sources'] });
+                    void qc.invalidateQueries({ queryKey: ['lists'] });
+                  } catch (err) {
+                    toast('error', errorText(err));
+                  }
                 }}
               >
                 Remove
