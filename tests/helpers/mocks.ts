@@ -19,6 +19,8 @@ export const IMDB_HEADER_LIST = 'ls020816782';
 export interface MockState {
   jellyfinDown: boolean;
   seerrRequests: { id: number; status: number; is4k: boolean; media: { id: number; tmdbId: number; tvdbId?: number; mediaType: string; status: number }; requestedBy: { id: number; displayName: string }; seasons: { seasonNumber: number }[]; createdAt?: string }[];
+  /** Request ids left out of the request list (still there one by one), e.g. modified during a sync. */
+  seerrListHidden: Set<number>;
   seerrMedia: Map<string, { id: number; tmdbId: number; tvdbId?: number; mediaType: string; status: number }>;
   seerrCalls: { method: string; path: string; apiUser: string | null; body?: unknown }[];
   traktCalls: string[];
@@ -73,6 +75,7 @@ export function createMocks() {
   const state: MockState = {
     jellyfinDown: false,
     seerrRequests: [],
+    seerrListHidden: new Set(),
     seerrMedia: new Map([['movie:949', { id: 1, tmdbId: 949, mediaType: 'movie', status: 5 }]]),
     seerrCalls: [],
     traktCalls: [],
@@ -244,7 +247,7 @@ export function createMocks() {
       }
       if (p === '/request' && method === 'GET') {
         const skip = Number(url.searchParams.get('skip') ?? 0);
-        return json({ pageInfo: { pages: 1 }, results: skip ? [] : state.seerrRequests });
+        return json({ pageInfo: { pages: 1 }, results: skip ? [] : state.seerrRequests.filter((r) => !state.seerrListHidden.has(r.id)) });
       }
       if (p === '/request' && method === 'POST') {
         const key = `${body.mediaType}:${body.mediaId}`;

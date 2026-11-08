@@ -12,7 +12,7 @@ export async function syncSeerr(ctx: AppContext) {
   if (!client) return { status: 'skipped' as const, stats: { reason: 'not configured' } };
   try {
     const startedAt = nowIso();
-    const media = await client.media();
+    const { media, complete } = await client.media();
     const upsertMedia = ctx.db.prepare(
       `INSERT INTO seerr_media (media_type, tmdb_id, seerr_media_id, status, status4k, seasons, jellyfin_item_id, synced_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -26,14 +26,14 @@ export async function syncSeerr(ctx: AppContext) {
       }
     })(media);
     // A complete pass succeeded: anything not seen is no longer tracked by Seerr.
-    ctx.db.prepare('DELETE FROM seerr_media WHERE synced_at < ?').run(startedAt);
+    if (complete) ctx.db.prepare('DELETE FROM seerr_media WHERE synced_at < ?').run(startedAt);
 
     const linked = await syncSeerrUsers(ctx).catch((err) => {
       ctx.log.warn({ err: (err as Error).message }, 'seerr user sync failed');
       return 0;
     });
 
-    const { requests, ids: seen, complete } = await client.requests();
+    const { requests, ids: seen } = await client.requests();
     let changed = 0;
     for (const r of requests) {
       if (upsertRequest(ctx, r, 'seerr')) changed++;
@@ -45,20 +45,16 @@ export async function syncSeerr(ctx: AppContext) {
     const local = ctx.db
       .prepare('SELECT seerr_request_id AS id FROM requests WHERE seerr_request_id IS NOT NULL AND request_status IS NOT NULL AND (synced_at IS NULL OR synced_at < ?) ORDER BY updated_at DESC')
       .all(startedAt) as { id: number }[];
+    // Not seen is not proof: the pages are sorted by modification, so a request changed during the pass
+    // moves to a page already read (and a pass may not read every request). Ask for each one.
     const missingIds = local.filter((o) => !seen.has(o.id));
     let missing = 0;
-    if (complete) {
-      ctx.db.transaction(() => missingIds.forEach((o) => gone.run(nowIso(), o.id)))();
-      missing = missingIds.length;
-    } else {
-      // More requests than one pass reads: check the ones not seen individually.
-      for (const o of missingIds.slice(0, 200)) {
-        const r = await client.request(o.id);
-        if (r) upsertRequest(ctx, r, 'seerr');
-        else {
-          missing++;
-          gone.run(nowIso(), o.id);
-        }
+    for (const o of missingIds.slice(0, 200)) {
+      const r = await client.request(o.id);
+      if (r) upsertRequest(ctx, r, 'seerr');
+      else {
+        missing++;
+        gone.run(nowIso(), o.id);
       }
     }
     ctx.integrations.markOk('seerr');

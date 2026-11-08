@@ -301,9 +301,10 @@ export async function janitorRoutes(app: FastifyInstance, { ctx }: AppDeps) {
     if (!ctx.titles.get(body.titleId)) throw new ApiError(404, 'not_found', 'Title not found.');
     if (body.ruleId && !store.rule(body.ruleId)) throw new ApiError(404, 'not_found', 'Rule not found.');
     const id = store.addExclusion({ titleId: body.titleId, season: body.season, ruleId: body.ruleId, until: body.days ? new Date(Date.now() + body.days * 86400_000).toISOString() : null, reason: body.reason || null, userId: u.id });
-    // Waiting cleanups of what is now kept stop right away (deletions already done stay done).
+    // Cleanups of what is now kept stop right away (deletions already done stay done). One running
+    // right now stops before its next deletion.
     const stopped = ctx.db
-      .prepare(`DELETE FROM janitor_candidates WHERE title_id = ? AND (? = -1 OR season = ?) AND (? IS NULL OR rule_id = ?) AND acted = 0 AND state != 'running'`)
+      .prepare(`DELETE FROM janitor_candidates WHERE title_id = ? AND (? = -1 OR season = ?) AND (? IS NULL OR rule_id = ?) AND state != 'running' AND (acted = 0 OR state != 'done')`)
       .run(body.titleId, body.season, body.season, body.ruleId, body.ruleId).changes;
     return { id, stopped };
   });

@@ -302,19 +302,23 @@ export class SeerrClient {
     return { requests: out, ids, complete: false };
   }
 
-  /** All media Seerr tracks (requested or detected as available). */
-  async media(maxItems = 20_000): Promise<SeerrMediaInfo[]> {
+  /**
+   * All media Seerr tracks (requested or detected as available), oldest additions last: unlike the
+   * modification order, items do not move to pages already read while this runs. `complete` is false
+   * when there were more than `maxItems`.
+   */
+  async media(maxItems = 20_000): Promise<{ media: SeerrMediaInfo[]; complete: boolean }> {
     const out: SeerrMediaInfo[] = [];
     for (let skip = 0; skip < maxItems; skip += 100) {
-      const res = await this.http.get('/media', { take: 100, skip, filter: 'all', sort: 'modified' });
+      const res = await this.http.get('/media', { take: 100, skip, filter: 'all', sort: 'added' });
       const data = z.object({ pageInfo: PageInfo, results: z.array(z.unknown()) }).parse(res.data);
       for (const r of data.results) {
         const p = MediaInfo.safeParse(r);
         if (p.success) out.push(p.data);
       }
-      if (data.results.length < 100) break;
+      if (data.results.length < 100) return { media: out, complete: true };
     }
-    return out;
+    return { media: out, complete: false };
   }
 }
 
