@@ -219,6 +219,21 @@ export function approvalAhead(rule: Pick<JanitorRule, 'mode' | 'steps'>, c: Pick
 
 const APPROVE_HINT = 'Approve or keep it in JellyWatcher.';
 
+/**
+ * Why "Delete now" cannot take a cleanup straight to its deletions, or null when it can: it has to
+ * be waiting (or waiting for approval) under a rule that is on, with a deletion still ahead. One
+ * parked at a condition keeps waiting for it; Delete now skips waits, never conditions.
+ */
+export function deleteNowBlocker(rule: Pick<JanitorRule, 'enabled' | 'steps'> | null | undefined, c: Pick<CandidateRow, 'state' | 'step_index' | 'context'>): string | null {
+  if (c.state !== 'waiting' && c.state !== 'awaiting_approval') return c.state === 'failed' ? 'It stopped after repeated failures; retry it instead.' : 'This cleanup is not waiting.';
+  if (!rule?.enabled) return 'Its rule is turned off.';
+  const ctxt = parseJson<CandidateContext>(c.context, {});
+  if (ctxt.deleteNow) return 'It is already being deleted.';
+  if (ctxt.parked) return `${ctxt.parked} Delete now does not skip conditions.`;
+  if (!rule.steps.slice(c.step_index).some((s) => DESTRUCTIVE_STEPS.has(s.type))) return 'Its rule has nothing left to delete.';
+  return null;
+}
+
 /** When the next deletion after `from` is due, counting the waits before it. */
 function nextDeletionAt(steps: JanitorStep[], from: number, anchor: Date): string | null {
   let t = anchor.getTime();
@@ -378,6 +393,12 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
       const anchor = new Date(c.anchor_at);
       switch (step.type) {
         case 'wait': {
+          // Delete now: no more waiting.
+          if (ctxt.deleteNow) {
+            c.anchor_at = now.toISOString();
+            c.step_index++;
+            break;
+          }
           const dueAt = anchor.getTime() + waitMs(step);
           if (now.getTime() < dueAt) {
             c.next_run_at = new Date(dueAt).toISOString();
@@ -391,6 +412,13 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
         }
         case 'notify': {
           ctxt.dueAt = nextDeletionAt(rule.steps, c.step_index + 1, now);
+          // Delete now: a warning of a deletion that happens right away tells nobody anything.
+          if (ctxt.deleteNow && ctxt.dueAt) {
+            log('notify', 'skipped', 'Not sent: deleted now.');
+            c.step_index++;
+            c.anchor_at = now.toISOString();
+            break;
+          }
           let msg = renderTemplate(step.message, { title, season: c.season, requester: (ctxt.requesters ?? []).join(', '), date: ctxt.dueAt, size: ctxt.sizeBytes ?? null, rule: rule.name });
           // The warning doubles as the approval request: one message, and it can be approved right away.
           if (approvalAhead(rule, c, c.step_index + 1)) {
@@ -443,6 +471,8 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
               if (ctxt.parked !== note) log('gate', 'info', note);
               ctxt.parked = note;
               ctxt.dueAt = null;
+              // Delete now was about now: whatever follows the condition runs on its own schedule.
+              delete ctxt.deleteNow;
               c.next_run_at = new Date(now.getTime() + 86400_000).toISOString();
             } else {
               log('gate', 'info', `Stopped here: it is not true that ${GATE_LABEL[step.condition]}.`);
@@ -487,7 +517,17 @@ export async function runJanitor(ctx: AppContext, opts: { now?: Date } = {}): Pr
             stats.steps++;
             break;
           }
-          const blocked = !windowOpen ? 'outside the deletion window' : actions >= settings['janitor.maxActionsPerRun'] ? 'deletion limit for this run reached' : !jellyfinFresh ? 'Jellyfin data is not up to date' : null;
+          // Delete now is an administrator's decision about this title: the window, the limit and the
+          // freshness of the viewing data (which only decide when to delete on their own) do not apply.
+          const blocked = ctxt.deleteNow
+            ? null
+            : !windowOpen
+              ? 'outside the deletion window'
+              : actions >= settings['janitor.maxActionsPerRun']
+                ? 'deletion limit for this run reached'
+                : !jellyfinFresh
+                  ? 'Jellyfin data is not up to date'
+                  : null;
           if (blocked) {
             stats.blocked = blocked;
             c.next_run_at = now.toISOString();

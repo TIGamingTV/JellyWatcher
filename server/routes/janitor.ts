@@ -5,14 +5,14 @@ import type { AppContext } from '../context.js';
 import { nowIso, parseJson } from '../db/index.js';
 import { ApiError } from '../http/errors.js';
 import { IdParam, parse } from '../http/validate.js';
-import { approvalAhead, previewRules } from '../janitor/engine.js';
+import { approvalAhead, deleteNowBlocker, previewRules } from '../janitor/engine.js';
 import { notifyAdmin } from '../janitor/notify.js';
 import { RuleInputSchema } from '../janitor/schema.js';
 import { JanitorStore, type CandidateContext, type CandidateRow } from '../janitor/store.js';
 import { requireAdmin } from '../security/auth.js';
 import { posterUrl } from '../services/cards.js';
 import { triggerJob } from '../sync/scheduler.js';
-import { NEXT_SEASON_LABEL, STEP_LABEL, templateRule, unitLabel, type CandidateState, type JanitorRule } from '../../shared/janitor.js';
+import { DELETE_NOW_LABEL, DESTRUCTIVE_STEPS, NEXT_SEASON_LABEL, STEP_LABEL, templateRule, unitLabel, type CandidateState, type JanitorRule } from '../../shared/janitor.js';
 
 /** Janitor administration. Registered only with JW_JANITOR on; every route needs an administrator. */
 
@@ -58,6 +58,12 @@ export function candidateView(ctx: AppContext, c: CandidateRow, rules: Map<numbe
     /** Will stop for approval; can be approved ahead of time. */
     needsApproval: c.state === 'awaiting_approval' || (rule ? c.state === 'waiting' && approvalAhead(rule, c, c.step_index) : false),
     approvalAsked: ctxt.approvalAsked ?? false,
+    /** "Delete now" can skip the waits and run its deletions right away. */
+    canDeleteNow: deleteNowBlocker(rule, c) === null,
+    /** An administrator chose to delete it now (until it is done, fails or stops at a condition). */
+    deleteNow: ctxt.deleteNow ?? false,
+    /** The deletions still ahead (what "Delete now" would do). */
+    deletions: rule ? rule.steps.slice(c.step_index).filter((s) => DESTRUCTIVE_STEPS.has(s.type)).map((s) => STEP_LABEL[s.type]) : [],
     attempts: c.attempts,
     lastError: c.last_error,
     requesters: ctxt.requesters ?? [],
@@ -242,6 +248,35 @@ export async function janitorRoutes(app: FastifyInstance, { ctx }: AppDeps) {
     return { ok: true };
   });
 
+  /**
+   * Delete now: the cleanup skips its remaining waits (and the warnings before its deletions) and
+   * runs right away, outside the deletion window and the per-run limit too. Counts as the approval.
+   * Keeps and conditions still apply, and the run still checks that it is ready.
+   */
+  app.post('/admin/janitor/candidates/:id/delete-now', async (req) => {
+    const u = requireAdmin(req);
+    const { id } = parse(IdParam, req.params);
+    const c = candidateOr404(id);
+    if (ctx.settings.get('janitor.paused')) throw new ApiError(409, 'paused', 'The Janitor is paused. Resume it to delete now.');
+    const rule = store.rule(c.rule_id);
+    const blocker = deleteNowBlocker(rule, c);
+    if (blocker) throw new ApiError(409, 'cannot_delete_now', blocker);
+    const now = nowIso();
+    const ctxt = parseJson<CandidateContext>(c.context, {});
+    const approving = !c.approved_at && c.dry_run !== 1 && (c.state === 'awaiting_approval' || approvalAhead(rule!, c, c.step_index));
+    c.context = JSON.stringify({ ...ctxt, deleteNow: true, dueAt: now });
+    c.approved_at ??= now;
+    c.state = 'waiting';
+    c.next_run_at = now;
+    store.saveCandidate(c);
+    store.log({ candidateId: c.id, ruleId: c.rule_id, ruleName: rule!.name, titleId: c.title_id, title: ctxt.title ?? `Title ${c.title_id}`, season: c.season, step: 'delete_now', outcome: 'info', message: `${u.displayName} chose to delete it now${approving ? ' (approved)' : ''}.` });
+    // A run under way already picked its cleanups: run again after it.
+    const busy = ctx.jobs.isRunning('janitor');
+    const run = triggerJob(ctx, 'janitor', 'manual');
+    if (busy) void run.then(() => triggerJob(ctx, 'janitor', 'manual'));
+    return { ok: true };
+  });
+
   /** Keeps the unit: an exclusion (for every rule, or this rule) and the cleanup stops. */
   app.post('/admin/janitor/candidates/:id/keep', async (req) => {
     const u = requireAdmin(req);
@@ -333,7 +368,7 @@ export async function janitorRoutes(app: FastifyInstance, { ctx }: AppDeps) {
         season: r.season,
         label: unitLabel(r.title, r.season),
         step: r.step,
-        stepLabel: r.step === 'next_season' ? NEXT_SEASON_LABEL : ((STEP_LABEL as Record<string, string>)[r.step] ?? r.step),
+        stepLabel: r.step === 'next_season' ? NEXT_SEASON_LABEL : r.step === 'delete_now' ? DELETE_NOW_LABEL : ((STEP_LABEL as Record<string, string>)[r.step] ?? r.step),
         outcome: r.outcome,
         message: r.message,
         freedBytes: r.freed_bytes,

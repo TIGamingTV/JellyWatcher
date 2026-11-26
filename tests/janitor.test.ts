@@ -574,6 +574,80 @@ describe('Janitor next season: a season that is not downloaded yet is not watche
   });
 });
 
+describe('Janitor: Delete now', () => {
+  const mocks = createMocks();
+  let t: Awaited<ReturnType<typeof testApp>>;
+  let ctx: AppContext;
+  let admin: Client;
+  let heatId: number;
+  let rule: any;
+  const heat = async () => ((await admin.get('/api/admin/janitor/overview')).data.candidates as any[]).find((c) => c.titleId === heatId);
+  const pad = (n: number) => String(n % 24).padStart(2, '0');
+
+  beforeAll(async () => {
+    vi.stubGlobal('fetch', mocks.fetch);
+    t = await testApp({ JW_JANITOR: '1' });
+    ctx = t.ctx;
+    admin = new Client(t.app);
+    await admin.post('/api/setup', { setupCode: SETUP_CODE, username: 'admin', password: 'a-long-password', displayName: 'Alice' });
+    await admin.put('/api/integrations/jellyfin', { config: { url: JF.url }, secrets: { apiKey: JF.key } });
+    await admin.put('/api/integrations/seerr', { config: { url: SEERR.url }, secrets: { apiKey: SEERR.key } });
+    await admin.put('/api/integrations/radarr', { config: { url: RADARR.url }, secrets: { apiKey: RADARR.key } });
+    await admin.put('/api/integrations/homeassistant', { config: { url: HA.url, service: HA.service }, secrets: { token: HA.token } });
+    await admin.post('/api/connections/jellyfin', { username: 'alice', password: 'alicepw' });
+    await settle(ctx);
+    mocks.state.seerrRequests.push({ id: 950, status: 5, is4k: false, media: { id: 1, tmdbId: 949, mediaType: 'movie', status: 5 }, requestedBy: { id: 1, displayName: 'Admin' }, seasons: [], createdAt: '2026-08-01T00:00:00.000Z' });
+    await syncJellyfin(ctx);
+    await syncSeerr(ctx);
+    heatId = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 949').get() as { id: number }).id;
+    // Deletions only between two and three hours from now: closed right now.
+    const h = new Date().getHours();
+    await admin.put('/api/admin/settings', { 'janitor.windowStart': `${pad(h + 2)}:00`, 'janitor.windowEnd': `${pad(h + 3)}:00` });
+    rule = (await admin.post('/api/admin/janitor/templates/movie')).data.rule;
+    rule = (await admin.put(`/api/admin/janitor/rules/${rule.id}`, { ...rule, enabled: true, mode: 'approval' })).data.rule;
+    await settle(ctx);
+  });
+  afterAll(async () => {
+    await settle(ctx);
+    await t.close();
+    vi.unstubAllGlobals();
+  });
+
+  it('is offered for a cleanup coming up, but not while the Janitor is paused', async () => {
+    expect(await heat()).toMatchObject({ state: 'waiting', nextStep: 'Wait', canDeleteNow: true, deleteNow: false, needsApproval: true, deletions: ['Delete movie in Radarr', 'Delete the request in Seerr'] });
+    await admin.put('/api/admin/settings', { 'janitor.paused': true });
+    const paused = await admin.post(`/api/admin/janitor/candidates/${(await heat()).id}/delete-now`);
+    expect(paused.status).toBe(409);
+    expect(paused.data.error.message).toMatch(/paused/);
+    await admin.put('/api/admin/settings', { 'janitor.paused': false });
+  });
+
+  it('skips the waits and the warning, counts as approval and ignores the deletion window', async () => {
+    const before = mocks.state.haNotifications.length;
+    const c = await heat();
+    expect((await admin.post(`/api/admin/janitor/candidates/${c.id}/delete-now`)).status).toBe(200);
+    await settle(ctx);
+    expect(mocks.state.radarrMovies).toHaveLength(0);
+    expect(mocks.state.seerrCalls.filter((x) => x.method === 'DELETE').map((x) => x.path)).toEqual(['/request/950']);
+    expect(ctx.db.prepare('SELECT state, acted FROM janitor_candidates WHERE id = ?').get(c.id)).toEqual({ state: 'done', acted: 1 });
+    // No "will be deleted on…" warning, no approval request; only the "cleaned up" notice.
+    expect(mocks.state.haNotifications.slice(before).map((n) => n.title)).toEqual(['Janitor: cleaned up']);
+    const entries = ((await admin.get('/api/admin/janitor/log')).data.entries as any[]).filter((e) => e.candidateId === c.id).reverse();
+    expect(entries.map((e) => [e.step, e.outcome])).toEqual([
+      ['start', 'info'],
+      ['delete_now', 'info'],
+      ['notify', 'skipped'],
+      ['radarr_delete_movie', 'ok'],
+      ['seerr_delete_request', 'ok'],
+      ['finish', 'info'],
+    ]);
+    expect(entries[1]).toMatchObject({ stepLabel: 'Delete now', message: 'Alice chose to delete it now (approved).' });
+    // Done: nothing left to delete now.
+    const again = await admin.post(`/api/admin/janitor/candidates/${c.id}/delete-now`);
+    expect(again.status).toBe(409);
+  });
+});
+
 describe('Janitor: titles deleted outside the Janitor', () => {
   const mocks = createMocks();
   let t: Awaited<ReturnType<typeof testApp>>;
@@ -747,6 +821,24 @@ describe('Janitor: what an administrator decides always wins', () => {
     // Steps after its place changed only: it stays where it is.
     await admin.put(`/api/admin/janitor/rules/${r.id}`, seasonRule(steps.slice(0, 2)));
     expect(candidates()).toEqual([{ season: 1, state: 'waiting', step_index: 1, acted: 1 }]);
+  });
+
+  it('delete now skips waits, not conditions', async () => {
+    const { t, admin, mocks, run, rule, candidates } = await setup();
+    await rule(seasonRule([{ type: 'wait', days: 3650, hours: 0 }, ...SEASON_STEPS]));
+    await run(0);
+    expect(candidates()).toEqual([{ season: 1, state: 'waiting', step_index: 0, acted: 0 }]);
+    const id = (t.ctx.db.prepare('SELECT id FROM janitor_candidates').get() as { id: number }).id;
+    expect((await admin.post(`/api/admin/janitor/candidates/${id}/delete-now`)).status).toBe(200);
+    await settle(t.ctx);
+    // Season 1 went at once; the show waits until it has ended, on its own schedule from then on.
+    expect(mocks.state.sonarrFiles.filter((f) => f.seasonNumber === 1)).toHaveLength(0);
+    expect(mocks.state.sonarrSeriesDeleted).toBe(false);
+    expect(candidates()).toEqual([{ season: 1, state: 'waiting', step_index: 2, acted: 1 }]);
+    const view = ((await admin.get('/api/admin/janitor/candidates')).data.candidates as any[])[0];
+    expect(view).toMatchObject({ deleteNow: false, canDeleteNow: false });
+    expect(view.parked).toMatch(/^Waiting until the show has ended/);
+    expect((await admin.post(`/api/admin/janitor/candidates/${id}/delete-now`)).data.error.message).toMatch(/Delete now does not skip conditions/);
   });
 
   it('a requested season that is not downloaded yet keeps the show', async () => {

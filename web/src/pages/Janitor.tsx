@@ -49,6 +49,12 @@ interface CandidateView {
   needsApproval: boolean;
   /** A notification already asked for the approval. */
   approvalAsked: boolean;
+  /** "Delete now" can skip the waits and run its deletions right away. */
+  canDeleteNow: boolean;
+  /** An administrator chose to delete it now. */
+  deleteNow: boolean;
+  /** The deletions still ahead. */
+  deletions: string[];
   attempts: number;
   lastError: string | null;
   requesters: string[];
@@ -213,6 +219,7 @@ function Overview() {
   const toast = useToast();
   const [running, setRunning] = useState(false);
   const [keep, setKeep] = useState<CandidateView | null>(null);
+  const [deleteNow, setDeleteNow] = useState<CandidateView | null>(null);
   if (q.isLoading) return <CenterLoading />;
   if (q.isError || !q.data) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   const d = q.data;
@@ -323,6 +330,7 @@ function Overview() {
               <button className="btn btn-small btn-destructive" onClick={() => act(c, 'approve')}>
                 <Check size={14} aria-hidden /> Approve
               </button>
+              {c.state === 'waiting' && c.canDeleteNow && <DeleteNowButton c={c} onClick={() => setDeleteNow(c)} />}
               <button className="btn btn-small" onClick={() => setKeep(c)}>
                 <ShieldCheck size={14} aria-hidden /> Keep
               </button>
@@ -357,6 +365,7 @@ function Overview() {
                   <Check size={14} aria-hidden /> Approve
                 </button>
               )}
+              {c.canDeleteNow && <DeleteNowButton c={c} onClick={() => setDeleteNow(c)} />}
               <button className="btn btn-small" onClick={() => setKeep(c)}>
                 <ShieldCheck size={14} aria-hidden /> Keep
               </button>
@@ -372,7 +381,54 @@ function Overview() {
 
       <JanitorSettings settings={d.settings} publicUrl={d.publicUrl} onSaved={refresh} />
       {keep && <KeepSheet c={keep} onClose={() => setKeep(null)} onDone={() => void refresh()} />}
+      {deleteNow && <DeleteNowSheet c={deleteNow} onClose={() => setDeleteNow(null)} onDone={() => setTimeout(() => void refresh(), 800)} />}
     </div>
+  );
+}
+
+function DeleteNowButton({ c, onClick }: { c: CandidateView; onClick: () => void }) {
+  return (
+    <button className="btn btn-small btn-destructive" onClick={onClick} aria-label={`Delete ${c.label} now`}>
+      <Trash2 size={14} aria-hidden /> Delete Now
+    </button>
+  );
+}
+
+/** Confirms "Delete now": skips the remaining waits and runs the deletions right away. */
+function DeleteNowSheet({ c, onClose, onDone }: { c: CandidateView; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      await post(`/admin/janitor/candidates/${c.id}/delete-now`);
+      toast('success', c.dryRun ? `Dry run: ${c.label} runs now; the log shows what would be deleted.` : `Deleting ${c.label} now.`);
+      onDone();
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const steps = c.deletions.length ? c.deletions.join(', ') : 'its deletions';
+  return (
+    <ConfirmSheet
+      open
+      destructive
+      busy={busy}
+      title={c.dryRun ? `Run ${c.label} now?` : `Delete ${c.label} now?`}
+      confirmLabel={c.dryRun ? 'Run Now' : 'Delete Now'}
+      onConfirm={confirm}
+      onClose={onClose}
+      message={
+        <div className="stack">
+          <p style={{ margin: 0 }}>
+            Skips the waiting time{c.needsApproval ? ' and counts as your approval' : ''}. “{c.ruleName ?? 'Its rule'}” then runs right away: {steps}.
+            {c.dryRun ? ' It is a dry run, so nothing is deleted; the log shows what would be.' : ''}
+          </p>
+          <p style={{ margin: 0 }}>Notifications warning about it are not sent, and the deletion window and the deletions-per-run limit do not apply. Conditions (“Continue only if…”) are still checked.</p>
+        </div>
+      }
+    />
   );
 }
 
@@ -382,13 +438,17 @@ function CandidateRow({ c, children }: { c: CandidateView; children: ReactNode }
       ? 'Next: ' + (c.nextStep ?? 'deletion')
       : c.parked
         ? c.parked
-        : c.dueAt
-          ? `${c.dryRun ? 'Would be deleted' : 'Deleted'} ${dateTime(c.dueAt)}${c.needsApproval ? ' once you approve it' : c.approvedAt ? ' · approved' : ''}`
-          : c.nextRunAt
-            ? `Next: ${c.nextStep ?? 'step'} · ${dateTime(c.nextRunAt)}`
-            : c.nextStep
-              ? `Next: ${c.nextStep}`
-              : '';
+        : c.deleteNow
+          ? c.dryRun
+            ? 'Dry run started now (Delete Now)'
+            : 'Being deleted now (Delete Now)'
+          : c.dueAt
+            ? `${c.dryRun ? 'Would be deleted' : 'Deleted'} ${dateTime(c.dueAt)}${c.needsApproval ? ' once you approve it' : c.approvedAt ? ' · approved' : ''}`
+            : c.nextRunAt
+              ? `Next: ${c.nextStep ?? 'step'} · ${dateTime(c.nextRunAt)}`
+              : c.nextStep
+                ? `Next: ${c.nextStep}`
+                : '';
   return (
     <div className="row" style={{ alignItems: 'flex-start' }}>
       <Thumb src={c.posterUrl} />
