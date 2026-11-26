@@ -296,6 +296,10 @@ export function progressFor(ctx: AppContext, person: PersonInfo, unit: Unit): Pe
  * How far one person is through a show unit: episodes they watched (played or marked) and how many
  * are still to go, counting episodes not downloaded yet. Episodes marked "Not Watching" are not left
  * to watch. `left` is null when they are not watching the show at all.
+ *
+ * Jellyfin's series-level "played" (`showWatched`) only means every episode in the library is played,
+ * so it covers those episodes and nothing else: a season still downloading is not watched because
+ * the seasons before it are.
  */
 function episodesLeft(
   unit: Unit,
@@ -306,15 +310,16 @@ function episodesLeft(
 ): { watched: number; left: number | null } {
   if (skips?.title) return { watched: 0, left: null };
   const inUnit = (s: number) => (unit.season >= 0 ? s === unit.season : s > 0);
-  const whole = (s: number) => showWatched || Boolean(marks?.title) || Boolean(marks?.seasons.has(s));
+  const whole = (s: number) => Boolean(marks?.title) || Boolean(marks?.seasons.has(s));
   if (unit.season >= 0 && whole(unit.season)) return { watched: unit.episodeCount, left: 0 };
+  const inJellyfin = new Set(unit.episodes);
   const keys = new Set(unit.episodes);
   for (const k of [...played.keys(), ...(marks?.episodes.keys() ?? [])]) if (inUnit(Number(k.split(':')[0]))) keys.add(k);
   let watched = 0;
   let covered = 0;
   for (const k of keys) {
     const [s, e] = k.split(':').map(Number) as [number, number];
-    if (played.has(k) || whole(s) || marks?.episodes.has(k)) {
+    if (played.has(k) || whole(s) || marks?.episodes.has(k) || (showWatched && inJellyfin.has(k))) {
       watched++;
       covered++;
     } else if (skips && (skips.seasons.has(s) || skips.episodes.has(epKey(s, e)))) covered++;
