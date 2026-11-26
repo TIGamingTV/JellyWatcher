@@ -513,6 +513,67 @@ describe('Janitor next season: catching up with a requester who moved on by hand
   });
 });
 
+describe('Janitor next season: a season that is not downloaded yet is not watched', () => {
+  const mocks = createMocks();
+  let t: Awaited<ReturnType<typeof testApp>>;
+  let ctx: AppContext;
+  let admin: Client;
+  const nextLog = async () => ((await admin.get('/api/admin/janitor/log')).data.entries as any[]).filter((e) => e.step === 'next_season');
+
+  beforeAll(async () => {
+    vi.stubGlobal('fetch', mocks.fetch);
+    t = await testApp({ JW_JANITOR: '1' });
+    ctx = t.ctx;
+    admin = new Client(t.app);
+    await admin.post('/api/setup', { setupCode: SETUP_CODE, username: 'admin', password: 'a-long-password', displayName: 'Alice' });
+    await admin.put('/api/integrations/jellyfin', { config: { url: JF.url }, secrets: { apiKey: JF.key } });
+    await admin.put('/api/integrations/seerr', { config: { url: SEERR.url }, secrets: { apiKey: SEERR.key } });
+    await admin.put('/api/integrations/sonarr', { config: { url: SONARR.url }, secrets: { apiKey: SONARR.key } });
+    await admin.post('/api/connections/jellyfin', { username: 'alice', password: 'alicepw' });
+    await settle(ctx);
+    // Seasons 1 and 2 requested; season 2 was just monitored and is still downloading. Alice
+    // finished season 1, the only one in Jellyfin, so Jellyfin reports the whole series as played.
+    mocks.state.sonarrSeasonCounts = { 0: 1, 1: 9, 2: 10, 3: 8 };
+    mocks.state.sonarrSeasonMonitored = { 0: false, 1: true, 2: true, 3: false };
+    mocks.state.sonarrFiles = mocks.state.sonarrFiles.filter((f) => f.seasonNumber === 1);
+    mocks.state.sevEpisodes = mocks.state.sevEpisodes.filter((e) => e.ParentIndexNumber === 1);
+    mocks.state.sevUserData = { Played: true, UnplayedItemCount: 0, PlayedPercentage: 100 };
+    mocks.state.seerrMedia.set('tv:95396', { id: 2, tmdbId: 95396, tvdbId: 371980, mediaType: 'tv', status: 4 });
+    mocks.state.seerrRequests.push({ id: 701, status: 2, is4k: false, media: { id: 2, tmdbId: 95396, tvdbId: 371980, mediaType: 'tv', status: 4 }, requestedBy: { id: 1, displayName: 'Admin' }, seasons: [{ seasonNumber: 1 }, { seasonNumber: 2 }], createdAt: '2026-08-01T00:00:00.000Z' });
+    await syncJellyfin(ctx);
+    await syncSeerr(ctx);
+    await syncJellyfin(ctx);
+    const rule = (await admin.post('/api/admin/janitor/templates/tv_season')).data.rule;
+    await admin.put(`/api/admin/janitor/rules/${rule.id}`, { ...rule, enabled: true, mode: 'auto' });
+    await settle(ctx);
+  });
+  afterAll(async () => {
+    await settle(ctx);
+    await t.close();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not monitor the season after one whose episodes are not in Jellyfin yet', async () => {
+    const sevId = (ctx.db.prepare('SELECT id FROM titles WHERE tmdb_id = 95396').get() as { id: number }).id;
+    expect(ctx.db.prepare('SELECT state FROM watch_history WHERE title_id = ?').get(sevId)).toEqual({ state: 'watched' });
+    await runJanitor(ctx);
+    await settle(ctx);
+    expect(await nextLog()).toEqual([]);
+    expect(mocks.state.sonarrSeasonMonitored[3]).toBe(false);
+  });
+
+  it('monitors it once season 2 is in Jellyfin and nearly watched', async () => {
+    mocks.state.sonarrFiles.push(...Array.from({ length: 10 }, (_, i) => ({ id: 300 + i, seasonNumber: 2, size: 1024 ** 3 })));
+    mocks.state.sevEpisodes.push(...Array.from({ length: 10 }, (_, i) => sevEpisode(2, i + 1, i < 8)));
+    mocks.state.sevUserData = { Played: false, UnplayedItemCount: 2, PlayedPercentage: 89 };
+    await syncJellyfin(ctx);
+    await runJanitor(ctx);
+    await settle(ctx);
+    expect((await nextLog()).map((e) => e.message)).toEqual(['Alice has 2 episodes of season 2 left: monitored season 3 in Sonarr and searched for it. It now counts as requested by Alice.']);
+    expect(mocks.state.sonarrSeasonMonitored[3]).toBe(true);
+  });
+});
+
 describe('Janitor: titles deleted outside the Janitor', () => {
   const mocks = createMocks();
   let t: Awaited<ReturnType<typeof testApp>>;

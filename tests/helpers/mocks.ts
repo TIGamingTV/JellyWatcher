@@ -49,6 +49,8 @@ export interface MockState {
   sonarrSeasonCounts: Record<number, number>;
   /** Jellyfin: Severance's episodes (Alice's view; others see nothing played). */
   sevEpisodes: ReturnType<typeof sevEpisode>[];
+  /** Jellyfin: Alice's series-level user data for Severance (Played once every episode in the library is). */
+  sevUserData: Record<string, unknown>;
   sonarrSeriesDeleted: boolean;
   sonarrCalls: { method: string; path: string; body?: unknown }[];
   radarrMovies: { id: number; title: string; tmdbId: number; hasFile: boolean; sizeOnDisk: number }[];
@@ -101,6 +103,7 @@ export function createMocks() {
     sonarrSeasonCounts: { 0: 1, 1: 9, 2: 10 },
     // Severance: season 1 (9 episodes, all watched) and season 2 (10 episodes, none watched).
     sevEpisodes: [...Array.from({ length: 9 }, (_, i) => sevEpisode(1, i + 1, true)), ...Array.from({ length: 10 }, (_, i) => sevEpisode(2, i + 1, false))],
+    sevUserData: { Played: false, UnplayedItemCount: 10, PlayedPercentage: 47 },
     sonarrSeriesDeleted: false,
     sonarrCalls: [],
     radarrMovies: [{ id: 7, title: 'Heat', tmdbId: 949, hasFile: true, sizeOnDisk: 20 * GB }],
@@ -116,7 +119,6 @@ export function createMocks() {
   ];
   const userData: Record<string, Record<string, unknown>> = {
     [HEAT_JF]: { Played: true, PlayCount: 1, PlayedPercentage: 100 },
-    [SEV_JF]: { Played: false, UnplayedItemCount: 10, PlayedPercentage: 47 },
   };
 
   const seerrDetails = (type: string, id: number) => {
@@ -211,7 +213,7 @@ export function createMocks() {
           if (!authed) return new Response('', { status: 401 });
           const start = Number(url.searchParams.get('startIndex') ?? 0);
           const uid = url.searchParams.get('userId');
-          const items = jellyfinItems.filter((i) => !state.jellyfinRemoved.has(i.Id)).slice(start).map((i) => (uid === ALICE_JF ? { ...i, UserData: userData[i.Id] } : uid ? { ...i, UserData: { Played: false } } : i));
+          const items = jellyfinItems.filter((i) => !state.jellyfinRemoved.has(i.Id)).slice(start).map((i) => (uid === ALICE_JF ? { ...i, UserData: i.Id === SEV_JF ? state.sevUserData : userData[i.Id] } : uid ? { ...i, UserData: { Played: false } } : i));
           return json({ Items: items, TotalRecordCount: items.length, StartIndex: start });
         }
         case `/Shows/${SEV_JF}/Episodes`: {

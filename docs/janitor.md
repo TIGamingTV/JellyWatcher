@@ -88,8 +88,9 @@ season they moved on to is never cleaned up and the request (and the show) may g
 still watching.
 
 With **Monitor the next season** on (default in the *Watched seasons* template), once a requester has
-at most **N episodes of a season left** (default 3; episodes not downloaded yet count as left,
-episodes marked *Not Watching* do not, and they must have watched at least one):
+at most **N episodes of a season left** (default 3; episodes not downloaded yet count as left, even
+when Jellyfin shows the series as played because every episode it has is; episodes marked *Not
+Watching* do not count, and they must have watched at least one):
 
 1. Sonarr monitors the next season and, unless turned off, searches for it right away (otherwise it
    only grabs new releases). A season that is already monitored is left as it is.
