@@ -159,6 +159,12 @@ Further safety nets:
   at once, also those that already deleted something; one that is running stops before its next
   deletion. Deletions that already happened stay done. Keeping one season also protects the whole
   show: steps that delete the show (or the movie, or the title in Seerr) do not run.
+- **Delete now:** in the Overview, *Delete now* (next to *Keep*) skips a cleanup's remaining waits and
+  runs it right away. It counts as your approval, its warning notifications are not sent, and the
+  deletion window, the deletions-per-run limit and the fresh-data check do not apply. Keeps and
+  conditions (*Continue only if…*) still do: one that stops at a condition waits for it as usual and
+  continues on its own schedule. Not while the Janitor is paused; in dry run it only logs what it
+  would delete.
 - **Pause:** the switch in the Overview stops every step. Rules are still checked so you can see what
   is coming up.
 - **Deletion window:** deletions only run between two times of day (server time zone, `TZ`). Waits,

@@ -102,6 +102,9 @@ export const STEP_LABEL: Record<JanitorStepType, string> = {
 /** Log label of what the next-season option did (not a step). */
 export const NEXT_SEASON_LABEL = 'Monitor the next season';
 
+/** Log label of an administrator's "Delete now" (not a step). */
+export const DELETE_NOW_LABEL = 'Delete now';
+
 export const GATE_LABEL: Record<'series_ended' | 'no_files_left', string> = {
   series_ended: 'the show has ended in Sonarr',
   no_files_left: 'no episode files are left (specials aside)',

@@ -32,6 +32,8 @@ export interface CandidateContext {
   approvalAsked?: boolean;
   /** Why it is parked at a gate that is checked again every day. */
   parked?: string | null;
+  /** An administrator pressed "Delete now": waits and warnings are skipped, the deletion window and limit do not apply. */
+  deleteNow?: boolean;
 }
 
 export interface CandidateRow {
@@ -132,7 +134,7 @@ export class JanitorStore {
       this.resetCandidates(id);
       const now = nowIso();
       const stmt = this.db.prepare(
-        "UPDATE janitor_candidates SET state = 'waiting', step_index = 0, anchor_at = eligible_at, next_run_at = ?, approved_at = NULL, attempts = 0, last_error = NULL, context = json_remove(context, '$.approvalAsked', '$.parked'), updated_at = ? WHERE id = ?",
+        "UPDATE janitor_candidates SET state = 'waiting', step_index = 0, anchor_at = eligible_at, next_run_at = ?, approved_at = NULL, attempts = 0, last_error = NULL, context = json_remove(context, '$.approvalAsked', '$.parked', '$.deleteNow'), updated_at = ? WHERE id = ?",
       );
       for (const c of restart) stmt.run(now, now, c.id);
     })();
